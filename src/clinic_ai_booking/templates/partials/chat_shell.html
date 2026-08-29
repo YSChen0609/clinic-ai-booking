@@ -1,0 +1,20 @@
+<aside id="chat-shell" class="chat-shell" aria-label="Clinic messenger">
+  <button type="button" id="chat-toggle" class="chat-toggle" aria-expanded="false" aria-controls="chat-panel">
+    Chat
+  </button>
+  <div id="chat-panel" class="chat-panel" hidden>
+    <header class="chat-header">
+      <span>Clinic assistant</span>
+      <button type="button" id="chat-close" class="chat-close" aria-label="Close chat">×</button>
+    </header>
+    <div id="chat-messages" class="chat-messages" role="log" aria-live="polite">
+      <div class="chat-bubble bot">
+        Hello. I can help with clinic services, availability, and booking. How can I help?
+      </div>
+    </div>
+    <form id="chat-form" class="chat-form" autocomplete="off">
+      <input id="chat-input" type="text" name="message" placeholder="Type a message…" maxlength="500" required>
+      <button type="submit">Send</button>
+    </form>
+  </div>
+</aside>

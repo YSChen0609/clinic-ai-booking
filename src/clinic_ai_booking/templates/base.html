@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} · Clinic AI Booking</title>
+  <link rel="stylesheet" href="/static/css/site.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">Clinic AI Booking</a>
+    <nav class="nav">
+      <a href="/">Intro</a>
+      {% for d in doctors %}
+      <a href="/doctors/{{ d.slug }}"{% if doctor is defined and doctor and doctor.slug == d.slug %} class="active"{% endif %}>{{ d.name }}</a>
+      {% endfor %}
+    </nav>
+    <div class="auth-bar">
+      {% if user %}
+      <span class="auth-user">Signed in as {{ user.name }}</span>
+      <form class="auth-form" method="post" action="/auth/logout">
+        <button type="submit">Log out</button>
+      </form>
+      {% else %}
+      <form class="auth-form" method="post" action="/auth/login">
+        <label>
+          <span class="sr-only">Name</span>
+          <input type="text" name="name" placeholder="Name" required autocomplete="name">
+        </label>
+        <label>
+          <span class="sr-only">Email</span>
+          <input type="email" name="email" placeholder="Email" required autocomplete="email">
+        </label>
+        <button type="submit">Log in</button>
+      </form>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <p>Hours and bookings use timezone {{ timezone }}. English only.</p>
+  </footer>
+
+  {% include "partials/chat_shell.html" %}
+  <script src="/static/js/chat.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="doctor-page">
+  <p class="eyebrow">{{ doctor.role }}</p>
+  <h1>{{ doctor.name }}</h1>
+  <p>{{ doctor.summary }}</p>
+  <p class="note">Calendar and booking will appear in a later stage.</p>
+  <p><a href="/">← Back to intro</a></p>
+</section>
+{% endblock %}

@@ -1,0 +1,17 @@
+# NVIDIA GPU overlay for the ollama service.
+# Use with the base stack (do not run this file alone):
+#   docker compose -f compose.yml -f compose.gpu.yml up --build -d
+#
+# Requires a GPU-ready host — see host-requirements.md.
+# Official ollama/ollama already ships CUDA userspace; this only requests host GPU passthrough.
+# Sources: Docker Compose GPU docs; NVIDIA Container Toolkit / Docker Desktop GPU (WSL2).
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
