@@ -74,8 +74,15 @@ def test_books_within_hours_when_slot_is_free(db_session: Session) -> None:
 
 def test_rejects_conflict_when_slots_overlap(db_session: Session) -> None:
     _book(db_session)
-    with pytest.raises(BookingError, match="overlaps"):
-        _book(db_session, clock=time(9, 30))
+    with pytest.raises(BookingError, match="already taken|doctor"):
+        book_appointment(
+            db_session,
+            professional_slug="junior",
+            service_code="A",
+            starts_at=clinic_datetime(MONDAY, time(9, 30)),
+            patient_name="Other",
+            patient_email="other@example.com",
+        )
 
 
 def test_rejects_normal_service_when_overlapping_a_break(db_session: Session) -> None:
@@ -242,7 +249,7 @@ def test_agent_style_new_booking_lists_checks_then_books(db_session: Session) ->
 
 def test_check_start_rejects_occupied_or_invalid_times(db_session: Session) -> None:
     _book(db_session, clock=time(9, 0))
-    with pytest.raises(BookingError, match="overlaps"):
+    with pytest.raises(BookingError, match="already taken|doctor"):
         check_start(
             db_session,
             professional_slug="junior",
@@ -385,7 +392,7 @@ def test_rejects_reschedule_when_new_slot_overlaps(db_session: Session) -> None:
         patient_email="other@example.com",
     )
     second = _book(db_session, clock=time(11, 0))
-    with pytest.raises(BookingError, match="overlaps"):
+    with pytest.raises(BookingError, match="already taken|doctor"):
         reschedule_appointment(
             db_session, second.id, clinic_datetime(MONDAY, time(9, 30))
         )
@@ -453,7 +460,7 @@ def test_rejects_second_booking_of_same_service_suggests_reschedule(
     db_session: Session,
 ) -> None:
     existing = _book(db_session, service="A", clock=time(9, 0))
-    with pytest.raises(BookingError, match="reschedule that appointment"):
+    with pytest.raises(BookingError, match="already has an active service"):
         _book(db_session, service="A", clock=time(14, 0))
     assert existing.status == STATUS_CONFIRMED
     assert len(list_patient_appointments(db_session, PATIENT["patient_email"])) == 1

@@ -151,6 +151,31 @@ def list_professionals(session: Session) -> list[ProfessionalInfo]:
     ]
 
 
+def explain_can_perform(
+    session: Session, professional_slug: str, service_code: str
+) -> tuple[bool, str]:
+    """Return (ok, reason) for whether this professional may perform the service."""
+    professional = _load_professional(session, professional_slug)
+    service = _load_service(session, service_code)
+    if _can_perform(professional, service):
+        level = "senior" if professional.is_senior else "junior"
+        return (
+            True,
+            f"{professional.name} ({level}) can perform service {service.code}.",
+        )
+    level = "senior professional" if professional.is_senior else "junior professional"
+    return (
+        False,
+        f"{professional.name} is a {level} and cannot perform service "
+        f"{service.code} (seniors only). Offer a senior doctor or a different service.",
+    )
+
+
+def get_service_duration(session: Session, service_code: str) -> int:
+    """Return fixed duration minutes for a service code."""
+    return _load_service(session, service_code).duration_minutes
+
+
 def list_available_starts(
     session: Session,
     professional_slug: str,
@@ -412,13 +437,17 @@ def _enforce_patient_booking_rules(
                 "that time overlaps your existing booking "
                 f"(booking_id={row.id}, service={row.service.code}, "
                 f"{row.starts_at.isoformat()}–{row.ends_at.isoformat()}); "
-                "choose a different time or reschedule"
+                "choose a different time or reschedule. "
+                "This is tied to the patient email, not login status."
             )
         if row.service_id == service_id:
             raise BookingError(
-                f"you already booked service {service_code} "
-                f"(booking_id={row.id}, {row.starts_at.isoformat()}); "
-                "reschedule that appointment instead of booking it again"
+                f"this email already has an active service {service_code} booking "
+                f"(booking_id={row.id}, {row.starts_at.isoformat()}). "
+                "Do not create another of the same service. "
+                "If the patient is a visitor: ask them to log in to reschedule/cancel "
+                "that booking, or use a different email. "
+                "Do not say a new booking is confirmed."
             )
     if len(existing) >= MAX_ACTIVE_BOOKINGS_PER_PATIENT:
         summary = ", ".join(
@@ -427,8 +456,9 @@ def _enforce_patient_booking_rules(
         )
         raise BookingError(
             "at most two different services at two different times; "
-            f"you already have {len(existing)} active bookings: {summary}. "
-            "Reschedule or cancel one before booking another"
+            f"this email already has {len(existing)} active bookings: {summary}. "
+            "Ask the patient to log in to reschedule/cancel one, or use another email. "
+            "Do not say a new booking is confirmed."
         )
 
 
@@ -474,7 +504,11 @@ def _check_slot(
     end = start + timedelta(minutes=service.duration_minutes)
     status = _status_for(service.code, start, end)
     if any(overlaps(start, end, b_start, b_end) for b_start, b_end in busy):
-        raise BookingError("that time overlaps an existing booking")
+        raise BookingError(
+            "that time is already taken on this doctor's calendar; "
+            "offer another start from list_available_starts "
+            "(this is not the patient's own booking)"
+        )
     return end, status
 
 
@@ -506,7 +540,11 @@ def _insert_appointment(
     except IntegrityError as exc:
         sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
         if sqlstate == "23P01":
-            raise BookingError("that time overlaps an existing booking") from exc
+            raise BookingError(
+                "that time is already taken on this doctor's calendar; "
+                "offer another start from list_available_starts "
+                "(this is not the patient's own booking)"
+            ) from exc
         raise BookingError("could not save booking") from exc
     return booking
 

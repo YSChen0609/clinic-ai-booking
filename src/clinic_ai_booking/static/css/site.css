@@ -232,6 +232,7 @@ a:hover {
   border-radius: 18px;
   font-size: 0.95rem;
   line-height: 1.35;
+  white-space: pre-wrap;
 }
 
 .chat-bubble.bot {
@@ -244,6 +245,55 @@ a:hover {
   align-self: flex-end;
   background: var(--accent);
   color: #fff;
+}
+
+.chat-faq-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  padding: 0.55rem 0.75rem 0.25rem;
+  background: #f7f8fa;
+  border-top: 1px solid transparent;
+}
+
+.chat-faq-chips[hidden] {
+  display: none;
+}
+
+.chat-faq-chip {
+  border: none;
+  border-radius: 999px;
+  padding: 0.45rem 0.95rem;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  transition: transform 0.12s ease, opacity 0.12s ease;
+}
+
+.chat-faq-chip:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.chat-faq-chip:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.chat-faq-chip--services {
+  background: #dbeafe;
+  color: #1e3a8a;
+}
+
+.chat-faq-chip--doctors {
+  background: #dcfce7;
+  color: #14532d;
+}
+
+.chat-faq-chip--hours {
+  background: #ffedd5;
+  color: #9a3412;
 }
 
 .chat-form {

@@ -130,7 +130,7 @@ Native Ollama uses the host driver (no toolkit). Point the **app** at it:
 2. In Compose for `app`, set `OLLAMA_BASE_URL` (e.g. `http://host.docker.internal:11434` on Docker Desktop).
 3. You can leave Compose `ollama` unused or stop that service.
 
-`llm.py` already reads `OLLAMA_BASE_URL` / `OLLAMA_MODEL`.
+Env vars `OLLAMA_BASE_URL` / `OLLAMA_MODEL` are for when you re-wire an LLM adapter (chat agent currently unwired).
 
 ---
 

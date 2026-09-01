@@ -48,13 +48,12 @@ Chat (after Ollama model is pulled): as a visitor, ask to reschedule or cancel �
 
 ## Chat agent (stage 3)
 
-1. Pull the model: `docker compose exec ollama ollama pull qwen2.5:7b`
-2. Open chat on the intro page.
-3. Ask something out of scope (e.g. a recipe) → polite refusal.
-4. Ask for services / junior availability → tool-backed reply.
-5. Book as visitor (give name + email when asked) → row in DB; app logs show fake calendar/email.
-6. Log in; book without re-entering name/email.
-7. Multi-turn: ask a follow-up in the same browser session (same cookie) — agent keeps thread history.
+## Chat (agent redesign)
+
+The chat **agent is unwired**. `POST /api/chat` returns a stub. Booking tools remain in `src/clinic_ai_booking/chat_tools.py` (`BOOKING_TOOLS`) for your redesign. Ollama is still in Compose when you re-attach an LLM.
+
+Messenger UI shell (history/reset) still works for layout smoke; do not expect tool-backed booking via chat until the new agent is wired.
+
 
 ## Book as visitor → account exists
 

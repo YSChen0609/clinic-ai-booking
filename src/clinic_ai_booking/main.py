@@ -1,11 +1,13 @@
-"""FastAPI entry: pages, health, session auth, booking API, and chat agent."""
+"""FastAPI entry: pages, health, session auth, booking API (chat agent TBD)."""
 
 from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 import logging
 import os
+import uuid
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -16,13 +18,6 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
-from clinic_ai_booking.agent import (
-    SESSION_THREAD_KEY,
-    SESSION_VISITOR_EMAIL_KEY,
-    SESSION_VISITOR_NAME_KEY,
-    new_thread_id,
-    run_chat_turn,
-)
 from clinic_ai_booking.auth import (
     LOGIN_REQUIRED_MESSAGE,
     SESSION_USER_ID_KEY,
@@ -33,7 +28,6 @@ from clinic_ai_booking.auth import (
     reschedule_for_user,
 )
 from clinic_ai_booking.booking import BookingError, book_appointment
-from clinic_ai_booking.chat_context import ChatContext
 from clinic_ai_booking.db import apply_schema_and_seed, database_url_from_env
 from clinic_ai_booking.doctors import DOCTORS, DOCTORS_BY_SLUG
 from clinic_ai_booking.hours import TIMEZONE_NAME
@@ -45,8 +39,17 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = PACKAGE_DIR / "templates"
 STATIC_DIR = PACKAGE_DIR / "static"
 
+# Messenger session keys (UI only until the agent is redesigned).
+SESSION_CHAT_DISPLAY_KEY = "chat_display"
+SESSION_THREAD_KEY = "chat_thread_id"
+
 # MVP local default only — set SESSION_SECRET in real deploys.
 _SESSION_SECRET = os.environ.get("SESSION_SECRET", "clinic-dev-session-secret-change-me")
+
+_CHAT_UNWIRED = (
+    "Chat agent is not wired yet. Booking tools remain in "
+    "clinic_ai_booking.chat_tools for the redesign."
+)
 
 _engine: Engine | None = None
 
@@ -223,46 +226,85 @@ class ChatBody(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
 
 
-@app.post("/api/chat")
-def api_chat(
-    request: Request,
-    body: ChatBody,
-    db: Session = Depends(get_db),
-    user: User | None = Depends(current_user),
-) -> dict:
-    """Run one messenger turn through create_agent (tools + session thread history)."""
+class FaqBody(BaseModel):
+    kind: Literal["services", "professionals", "hours"]
+
+
+def _session_display(request: Request) -> list[dict[str, str]]:
+    """Return the UI chat transcript stored on the session cookie."""
+    raw = request.session.get(SESSION_CHAT_DISPLAY_KEY)
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        text = item.get("text")
+        if role in {"user", "bot"} and isinstance(text, str) and text.strip():
+            out.append({"role": role, "text": text})
+    return out
+
+
+def _append_display(request: Request, role: str, text: str) -> None:
+    """Append one bubble to the session transcript (capped)."""
+    rows = _session_display(request)
+    rows.append({"role": role, "text": text.strip()})
+    request.session[SESSION_CHAT_DISPLAY_KEY] = rows[-80:]
+
+
+def _new_thread_id() -> str:
+    """Allocate a messenger thread id for the session cookie."""
+    return str(uuid.uuid4())
+
+
+def _reset_chat_session(request: Request) -> str:
+    """Clear messenger transcript for this browser session."""
+    request.session.pop(SESSION_CHAT_DISPLAY_KEY, None)
+    request.session.pop(SESSION_THREAD_KEY, None)
+    thread_id = _new_thread_id()
+    request.session[SESSION_THREAD_KEY] = thread_id
+    return thread_id
+
+
+@app.get("/api/chat/history")
+def api_chat_history(request: Request) -> dict:
+    """Return session-stored messenger bubbles (no agent)."""
     thread_id = request.session.get(SESSION_THREAD_KEY)
     if not isinstance(thread_id, str) or not thread_id:
-        thread_id = new_thread_id()
+        thread_id = _new_thread_id()
         request.session[SESSION_THREAD_KEY] = thread_id
+    return {
+        "thread_id": thread_id,
+        "messages": _session_display(request),
+        "has_visitor_contact": False,
+    }
 
-    visitor_name = request.session.get(SESSION_VISITOR_NAME_KEY)
-    visitor_email = request.session.get(SESSION_VISITOR_EMAIL_KEY)
-    if user is not None:
-        visitor_name = None
-        visitor_email = None
 
-    context = ChatContext(
-        db=db,
-        user_id=user.id if user else None,
-        user_name=user.name if user else None,
-        user_email=user.email if user else None,
-        visitor_name=visitor_name if isinstance(visitor_name, str) else None,
-        visitor_email=visitor_email if isinstance(visitor_email, str) else None,
-    )
-    try:
-        reply = run_chat_turn(message=body.message, thread_id=thread_id, context=context)
-    except Exception:
-        logger.exception("chat turn failed thread_id=%s", thread_id)
-        raise HTTPException(
-            status_code=502,
-            detail="Chat is temporarily unavailable. Is Ollama running with the model pulled?",
-        ) from None
+@app.post("/api/chat/reset")
+def api_chat_reset(request: Request) -> dict:
+    """Clear the messenger transcript (browser refresh). Keeps login if any."""
+    thread_id = _reset_chat_session(request)
+    return {"ok": True, "thread_id": thread_id, "messages": []}
 
-    if user is None and context.has_visitor_contact:
-        request.session[SESSION_VISITOR_NAME_KEY] = context.visitor_name
-        request.session[SESSION_VISITOR_EMAIL_KEY] = context.visitor_email
 
+@app.post("/api/faq")
+def api_faq(body: FaqBody, request: Request) -> dict:
+    """FAQ chips stub — agent/FAQ layer removed pending redesign."""
+    del body, request
+    raise HTTPException(status_code=501, detail=_CHAT_UNWIRED)
+
+
+@app.post("/api/chat")
+def api_chat(request: Request, body: ChatBody) -> dict:
+    """Chat stub — agent removed; booking tools remain in chat_tools."""
+    thread_id = request.session.get(SESSION_THREAD_KEY)
+    if not isinstance(thread_id, str) or not thread_id:
+        thread_id = _new_thread_id()
+        request.session[SESSION_THREAD_KEY] = thread_id
+    reply = _CHAT_UNWIRED
+    _append_display(request, "user", body.message)
+    _append_display(request, "bot", reply)
     return {"reply": reply, "thread_id": thread_id}
 
 
