@@ -57,6 +57,7 @@ from clinic_ai_booking.notify import (
     notify_booking_cancelled,
     notify_booking_created,
     notify_booking_rescheduled,
+    notify_calendar_remove_only,
 )
 
 NotifyFn = Callable[[Booking], None]
@@ -256,12 +257,48 @@ def list_busy_blocks(
     session: Session, professional_slug: str, day: date
 ) -> list[BusyBlock]:
     """Return busy blocks for that professional and day (no patient fields)."""
+    return list_busy_blocks_range(session, professional_slug, day, day)
+
+
+def list_busy_blocks_range(
+    session: Session,
+    professional_slug: str,
+    start_day: date,
+    end_day: date,
+) -> list[BusyBlock]:
+    """Return busy blocks for that professional from start_day through end_day inclusive."""
+    if end_day < start_day:
+        raise BookingError("end day must be on or after start day")
     professional = _load_professional(session, professional_slug)
-    intervals = _active_intervals(session, professional.id, day)
+    range_start, _ = day_range(start_day)
+    _, range_end = day_range(end_day)
+    stmt = (
+        select(Booking.starts_at, Booking.ends_at)
+        .where(
+            Booking.professional_id == professional.id,
+            Booking.status.in_(ACTIVE_STATUSES),
+            Booking.starts_at < range_end,
+            Booking.ends_at > range_start,
+        )
+        .order_by(Booking.starts_at)
+    )
     return [
-        BusyBlock(professional_slug=professional.slug, starts_at=start, ends_at=end)
-        for start, end in intervals
+        BusyBlock(
+            professional_slug=professional.slug,
+            starts_at=row.starts_at,
+            ends_at=row.ends_at,
+        )
+        for row in session.execute(stmt).all()
     ]
+
+
+def busy_block_public_dict(block: BusyBlock) -> dict[str, str]:
+    """Serialize a busy block for public calendar APIs (no patient fields)."""
+    return {
+        "professional_slug": block.professional_slug,
+        "starts_at": block.starts_at.isoformat(),
+        "ends_at": block.ends_at.isoformat(),
+    }
 
 
 def list_patient_appointments(
@@ -400,9 +437,37 @@ def reschedule_appointment(
         notify=_noop_notify,
         ignore_booking_id=original.id,
     )
-    cancel_appointment(session, original.id, notify=_noop_notify)
+    # Drop the original calendar event without a cancel email; then notify replacement.
+    cancel_appointment(session, original.id, notify=notify_calendar_remove_only)
     notify(replacement)
     return replacement
+
+
+def booking_created_dict(booking: Booking) -> dict[str, object]:
+    """Serialize a new booking for HTTP and chat tools."""
+    return {
+        "id": booking.id,
+        "status": booking.status,
+        "patient_email": booking.patient_email,
+        "user_id": booking.user_id,
+        "starts_at": booking.starts_at.isoformat(),
+        "ends_at": booking.ends_at.isoformat(),
+    }
+
+
+def booking_cancelled_dict(booking: Booking) -> dict[str, object]:
+    """Serialize a cancelled booking for HTTP and chat tools."""
+    return {"id": booking.id, "status": booking.status}
+
+
+def booking_rescheduled_dict(booking: Booking) -> dict[str, object]:
+    """Serialize a rescheduled booking for HTTP and chat tools."""
+    return {
+        "id": booking.id,
+        "status": booking.status,
+        "starts_at": booking.starts_at.isoformat(),
+        "ends_at": booking.ends_at.isoformat(),
+    }
 
 
 def _noop_notify(_booking: Booking) -> None:
@@ -427,38 +492,33 @@ def _enforce_patient_booking_rules(
     for row in existing:
         if row.starts_at == starts_at:
             raise BookingError(
-                "you already have a booking at that time "
-                f"(booking_id={row.id}, service={row.service.code}, "
-                f"{row.starts_at.isoformat()}); "
-                "remind the patient — do not rebook the same slot"
+                f"You already have booking #{row.id} at that same time "
+                f"(service {row.service.code}, {row.starts_at.isoformat()}). "
+                "Log in to manage it, or pick a different time."
             )
         if overlaps(starts_at, ends_at, row.starts_at, row.ends_at):
             raise BookingError(
-                "that time overlaps your existing booking "
-                f"(booking_id={row.id}, service={row.service.code}, "
-                f"{row.starts_at.isoformat()}–{row.ends_at.isoformat()}); "
-                "choose a different time or reschedule. "
-                "This is tied to the patient email, not login status."
+                f"That time overlaps your booking #{row.id} "
+                f"(service {row.service.code}, "
+                f"{row.starts_at.isoformat()}–{row.ends_at.isoformat()}). "
+                "Pick another time, or log in to reschedule."
             )
         if row.service_id == service_id:
             raise BookingError(
-                f"this email already has an active service {service_code} booking "
-                f"(booking_id={row.id}, {row.starts_at.isoformat()}). "
-                "Do not create another of the same service. "
-                "If the patient is a visitor: ask them to log in to reschedule/cancel "
-                "that booking, or use a different email. "
-                "Do not say a new booking is confirmed."
+                f"This email already has an active service {service_code} booking "
+                f"(#{row.id} on {row.starts_at.isoformat()}). "
+                "Log in to reschedule or cancel it, or use a different email. "
+                "I did not create a new booking."
             )
     if len(existing) >= MAX_ACTIVE_BOOKINGS_PER_PATIENT:
         summary = ", ".join(
-            f"{row.service.code} at {row.starts_at.isoformat()} (id={row.id})"
+            f"{row.service.code} at {row.starts_at.isoformat()} (#{row.id})"
             for row in existing
         )
         raise BookingError(
-            "at most two different services at two different times; "
-            f"this email already has {len(existing)} active bookings: {summary}. "
-            "Ask the patient to log in to reschedule/cancel one, or use another email. "
-            "Do not say a new booking is confirmed."
+            f"This email already has {len(existing)} active bookings ({summary}). "
+            "The limit is two. Log in to reschedule or cancel one, "
+            "or use a different email. I did not create a new booking."
         )
 
 

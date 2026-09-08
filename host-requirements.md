@@ -113,10 +113,11 @@ docker compose up -d --force-recreate ollama
 
 | Need | Why |
 |------|-----|
-| Docker Engine or Docker Desktop (Compose v2) | Runs `app`, `db`, `ollama` |
+| Docker Engine or Docker Desktop (Compose v2) | Runs `app`, `db`, `ollama`, `voice` |
 | Network (first run) | Pull images + model weights |
-| Disk | Multi‑GB model; volume `ollama_data` keeps pulls across recreate |
-| Free ports (or remap in `.env`) | App `8000`, Postgres `5432`, Ollama `11434` |
+| Disk | Multi‑GB Ollama model; Voicebox build caches Whisper + Piper in the image; volume `ollama_data` keeps Ollama pulls |
+| Free ports (or remap in `.env`) | App `8000`, Postgres `5432`, Ollama `11434`, Voice `8790` |
+| Extra RAM for voice | ~0.5–1+ GiB for Voicebox (distil-whisper-small.en + Piper) on top of Ollama |
 
 Tight VRAM: set a smaller `OLLAMA_MODEL` in `.env` and pull that tag instead.
 

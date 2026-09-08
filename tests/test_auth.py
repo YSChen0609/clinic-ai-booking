@@ -35,6 +35,10 @@ def api_client(db_engine: Engine, db_session: Session) -> TestClient:
 
     app.dependency_overrides[get_db] = _override_db
     with TestClient(app) as client:
+        set_engine(db_engine)
+        from clinic_ai_booking.notify import reset_ports_to_fakes
+
+        reset_ports_to_fakes()
         yield client
     app.dependency_overrides.clear()
     set_engine(None)

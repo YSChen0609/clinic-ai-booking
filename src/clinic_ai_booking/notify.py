@@ -1,9 +1,9 @@
-"""Notify hooks: fake CalendarPort / EmailPort today; real adapters in stage 6."""
+"""Notify hooks: CalendarPort / EmailPort (fakes by default; real via adapters)."""
 
 from __future__ import annotations
 
 from clinic_ai_booking.fakes import FakeCalendar, FakeEmail
-from clinic_ai_booking.models import Booking
+from clinic_ai_booking.models import STATUS_CONFIRMED, Booking
 from clinic_ai_booking.ports import CalendarPort, EmailPort
 
 _calendar: CalendarPort = FakeCalendar()
@@ -21,7 +21,7 @@ def get_email_port() -> EmailPort:
 
 
 def set_ports(calendar: CalendarPort, email: EmailPort) -> None:
-    """Replace process adapters (tests or stage-6 wiring)."""
+    """Replace process adapters (tests or real wiring)."""
     global _calendar, _email
     _calendar = calendar
     _email = email
@@ -36,8 +36,9 @@ def reset_ports_to_fakes() -> tuple[FakeCalendar, FakeEmail]:
 
 
 def notify_booking_created(booking: Booking) -> None:
-    """Sync calendar + email after a new booking is saved."""
-    _calendar.upsert_booking(booking)
+    """Email always; calendar upsert only when status is confirmed."""
+    if booking.status == STATUS_CONFIRMED:
+        _calendar.upsert_booking(booking)
     _email.send_booking_created(booking)
 
 
@@ -47,7 +48,13 @@ def notify_booking_cancelled(booking: Booking) -> None:
     _email.send_booking_cancelled(booking)
 
 
+def notify_calendar_remove_only(booking: Booking) -> None:
+    """Remove calendar event without email (reschedule drops the original)."""
+    _calendar.remove_booking(booking)
+
+
 def notify_booking_rescheduled(booking: Booking) -> None:
-    """Update calendar + email after reschedule (replacement booking)."""
-    _calendar.upsert_booking(booking)
+    """Upsert calendar when confirmed + email for the replacement booking."""
+    if booking.status == STATUS_CONFIRMED:
+        _calendar.upsert_booking(booking)
     _email.send_booking_rescheduled(booking)

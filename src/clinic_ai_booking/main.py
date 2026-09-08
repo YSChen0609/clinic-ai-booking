@@ -1,16 +1,16 @@
-"""FastAPI entry: pages, health, session auth, booking API (chat agent TBD)."""
+"""FastAPI entry: pages, health, session auth, booking API, chat agent."""
 
 from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Literal
 import logging
 import os
 import uuid
+from collections import defaultdict
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -27,11 +27,33 @@ from clinic_ai_booking.auth import (
     login_with_name_email,
     reschedule_for_user,
 )
-from clinic_ai_booking.booking import BookingError, book_appointment
+from clinic_ai_booking.booking import (
+    BookingError,
+    BusyBlock,
+    book_appointment,
+    booking_cancelled_dict,
+    booking_created_dict,
+    booking_rescheduled_dict,
+    busy_block_public_dict,
+    list_busy_blocks_range,
+)
+from clinic_ai_booking.chat.agent import ClinicAgent
+from clinic_ai_booking.chat.context import clear_chat_booking_state, has_visitor_contact_in_session
+from clinic_ai_booking.chat.deps import get_chat_agent
+from clinic_ai_booking.chat.factory import create_chat_agent, shutdown_chat_agent
+from clinic_ai_booking.chat.responses import faq_label
+from clinic_ai_booking.chat.session_keys import SESSION_CHAT_DISPLAY_KEY, SESSION_THREAD_KEY
+from clinic_ai_booking.adapters.wiring import close_adapter_http, install_ports_from_env
+from clinic_ai_booking.config import ChatSettings, NotifySettings, VoiceSettings
 from clinic_ai_booking.db import apply_schema_and_seed, database_url_from_env
 from clinic_ai_booking.doctors import DOCTORS, DOCTORS_BY_SLUG
-from clinic_ai_booking.hours import TIMEZONE_NAME
+from clinic_ai_booking.hours import TIMEZONE_NAME, clinic_today, is_weekday, to_clinic
 from clinic_ai_booking.models import User
+from clinic_ai_booking.voice import VoiceError, synthesize_speech, transcribe_audio
+
+# Public doctor calendars show this many days starting at `from`.
+_CALENDAR_DAYS = 7
+_MAX_BUSY_RANGE_DAYS = 31
 
 logger = logging.getLogger(__name__)
 
@@ -39,17 +61,12 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = PACKAGE_DIR / "templates"
 STATIC_DIR = PACKAGE_DIR / "static"
 
-# Messenger session keys (UI only until the agent is redesigned).
-SESSION_CHAT_DISPLAY_KEY = "chat_display"
-SESSION_THREAD_KEY = "chat_thread_id"
-
 # MVP local default only — set SESSION_SECRET in real deploys.
 _SESSION_SECRET = os.environ.get("SESSION_SECRET", "clinic-dev-session-secret-change-me")
 
-_CHAT_UNWIRED = (
-    "Chat agent is not wired yet. Booking tools remain in "
-    "clinic_ai_booking.chat_tools for the redesign."
-)
+_CHAT_UNAVAILABLE = "Chat is temporarily unavailable. Check Ollama and try again."
+_VOICE_UNAVAILABLE = "Voice is temporarily unavailable. Check the voice service and try again."
+_MAX_VOICE_UPLOAD_BYTES = 25 * 1024 * 1024
 
 _engine: Engine | None = None
 
@@ -66,8 +83,8 @@ def set_engine(engine: Engine | None) -> None:
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Apply booking schema and seed catalog when DATABASE_URL is set."""
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Apply booking schema, seed catalog, and start the chat agent."""
     package_log = logging.getLogger("clinic_ai_booking")
     package_log.setLevel(logging.INFO)
     if not package_log.handlers:
@@ -79,7 +96,40 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     url = database_url_from_env()
     if url:
         set_engine(apply_schema_and_seed(url))
+
+    settings = ChatSettings.from_env()
+    app.state.chat_settings = settings
+    voice_settings = VoiceSettings.from_env()
+    app.state.voice_settings = voice_settings
+    notify_settings = NotifySettings.from_env()
+    app.state.notify_settings = notify_settings
+    install_ports_from_env(notify_settings)
+    if settings.chat_enabled:
+        app.state.chat_agent = create_chat_agent(settings=settings)
+        logger.info("chat agent started model=%s", settings.ollama_model)
+    else:
+        app.state.chat_agent = None
+        logger.info("chat agent disabled (CHAT_ENABLED=false)")
+    logger.info(
+        "voice settings enabled=%s base_url=%s stt=%s tts_voice=%s",
+        voice_settings.enabled,
+        voice_settings.base_url,
+        voice_settings.stt_model,
+        voice_settings.tts_voice,
+    )
+    logger.info(
+        "notify mode=%s google_ready=%s outlook_ready=%s email_provider=%s",
+        notify_settings.mode,
+        notify_settings.google_ready,
+        notify_settings.outlook_ready,
+        notify_settings.email_provider,
+    )
+
     yield
+
+    shutdown_chat_agent(getattr(app.state, "chat_agent", None))
+    app.state.chat_agent = None
+    close_adapter_http()
     set_engine(None)
 
 
@@ -160,6 +210,79 @@ def _page_context(
     }
 
 
+def _parse_calendar_day(raw: str | None, *, label: str) -> date | None:
+    """Parse YYYY-MM-DD or return None when raw is empty."""
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return date.fromisoformat(raw.strip())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{label} must be YYYY-MM-DD",
+        ) from exc
+
+
+def _calendar_window(
+    *,
+    from_day: date | None,
+    to_day: date | None,
+) -> tuple[date, date]:
+    """Resolve inclusive busy-calendar bounds (default: clinic today + 6 days)."""
+    start = from_day or clinic_today()
+    end = to_day or (start + timedelta(days=_CALENDAR_DAYS - 1))
+    if end < start:
+        raise HTTPException(status_code=400, detail="to must be on or after from")
+    if (end - start).days > _MAX_BUSY_RANGE_DAYS - 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"range must be at most {_MAX_BUSY_RANGE_DAYS} days",
+        )
+    return start, end
+
+
+def _busy_days_for_template(
+    blocks: list[BusyBlock], start: date, end: date
+) -> list[dict]:
+    """Group busy blocks by clinic day for the doctor calendar UI."""
+    by_day: dict[date, list[BusyBlock]] = defaultdict(list)
+    for block in blocks:
+        by_day[to_clinic(block.starts_at).date()].append(block)
+    days: list[dict] = []
+    cursor = start
+    while cursor <= end:
+        day_blocks = by_day.get(cursor, [])
+        open_day = is_weekday(cursor)
+        days.append(
+            {
+                "day": cursor,
+                "label": cursor.strftime("%a %d %b"),
+                "is_open": open_day,
+                "blocks": [
+                    {
+                        "starts_at": to_clinic(b.starts_at),
+                        "ends_at": to_clinic(b.ends_at),
+                    }
+                    for b in day_blocks
+                ],
+            }
+        )
+        cursor += timedelta(days=1)
+    return days
+
+
+def _load_busy_blocks(slug: str, start: date, end: date) -> list[BusyBlock]:
+    """Load busy blocks for a professional when the DB is configured."""
+    engine = get_engine()
+    if engine is None:
+        return []
+    with Session(engine) as session:
+        try:
+            return list_busy_blocks_range(session, slug, start, end)
+        except BookingError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     """Return service liveness for Compose and smoke checks."""
@@ -177,21 +300,65 @@ def intro(request: Request) -> HTMLResponse:
 
 
 @app.get("/doctors/{slug}", response_class=HTMLResponse)
-def doctor_page(request: Request, slug: str) -> HTMLResponse:
-    """Render a single doctor placeholder page."""
+def doctor_page(
+    request: Request,
+    slug: str,
+    from_day: str | None = Query(default=None, alias="from"),
+) -> HTMLResponse:
+    """Render a doctor intro and busy-only calendar for that professional."""
     doctor = DOCTORS_BY_SLUG.get(slug)
     if doctor is None:
         raise HTTPException(status_code=404, detail="Doctor not found")
-    return templates.TemplateResponse(
-        request,
-        "doctor.html",
-        _page_context(
-            request,
-            title=doctor.name,
-            user=optional_user(request),
-            doctor=doctor,
-        ),
+    start, end = _calendar_window(
+        from_day=_parse_calendar_day(from_day, label="from"),
+        to_day=None,
     )
+    blocks = _load_busy_blocks(slug, start, end)
+    prev_from = (start - timedelta(days=_CALENDAR_DAYS)).isoformat()
+    next_from = (start + timedelta(days=_CALENDAR_DAYS)).isoformat()
+    ctx = _page_context(
+        request,
+        title=doctor.name,
+        user=optional_user(request),
+        doctor=doctor,
+    )
+    ctx.update(
+        {
+            "calendar_from": start,
+            "calendar_to": end,
+            "calendar_days": _busy_days_for_template(blocks, start, end),
+            "calendar_prev_from": prev_from,
+            "calendar_next_from": next_from,
+        }
+    )
+    return templates.TemplateResponse(request, "doctor.html", ctx)
+
+
+@app.get("/api/doctors/{slug}/busy")
+def api_doctor_busy(
+    slug: str,
+    db: Session = Depends(get_db),
+    from_day: str | None = Query(default=None, alias="from"),
+    to_day: str | None = Query(default=None, alias="to"),
+) -> dict:
+    """Return busy blocks for one professional (times only; no patient fields)."""
+    if slug not in DOCTORS_BY_SLUG:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    start, end = _calendar_window(
+        from_day=_parse_calendar_day(from_day, label="from"),
+        to_day=_parse_calendar_day(to_day, label="to"),
+    )
+    try:
+        blocks = list_busy_blocks_range(db, slug, start, end)
+    except BookingError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "professional_slug": slug,
+        "timezone": TIMEZONE_NAME,
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+        "busy": [busy_block_public_dict(block) for block in blocks],
+    }
 
 
 @app.get("/auth/me")
@@ -226,8 +393,21 @@ class ChatBody(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
 
 
-class FaqBody(BaseModel):
-    kind: Literal["services", "professionals", "hours"]
+class SpeakBody(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+
+
+def _voice_settings(request: Request) -> VoiceSettings:
+    """Return voice settings from app state or environment."""
+    cached = getattr(request.app.state, "voice_settings", None)
+    if isinstance(cached, VoiceSettings):
+        return cached
+    return VoiceSettings.from_env()
+
+
+def _user_display_text(message: str) -> str:
+    """Map FAQ chip tokens to friendly labels for the session transcript."""
+    return faq_label(message) or message.strip()
 
 
 def _session_display(request: Request) -> list[dict[str, str]]:
@@ -259,53 +439,126 @@ def _new_thread_id() -> str:
 
 
 def _reset_chat_session(request: Request) -> str:
-    """Clear messenger transcript for this browser session."""
+    """Clear messenger transcript, draft, and chat contact for this browser session."""
     request.session.pop(SESSION_CHAT_DISPLAY_KEY, None)
     request.session.pop(SESSION_THREAD_KEY, None)
+    clear_chat_booking_state(request.session)
     thread_id = _new_thread_id()
     request.session[SESSION_THREAD_KEY] = thread_id
     return thread_id
 
 
 @app.get("/api/chat/history")
-def api_chat_history(request: Request) -> dict:
-    """Return session-stored messenger bubbles (no agent)."""
+def api_chat_history(
+    request: Request,
+    user: User | None = Depends(current_user),
+) -> dict:
+    """Return session-stored messenger bubbles for this browser session."""
     thread_id = request.session.get(SESSION_THREAD_KEY)
     if not isinstance(thread_id, str) or not thread_id:
         thread_id = _new_thread_id()
         request.session[SESSION_THREAD_KEY] = thread_id
+    can_book = user is not None or has_visitor_contact_in_session(request.session)
     return {
         "thread_id": thread_id,
         "messages": _session_display(request),
-        "has_visitor_contact": False,
+        "can_book_now": can_book,
     }
 
 
 @app.post("/api/chat/reset")
 def api_chat_reset(request: Request) -> dict:
-    """Clear the messenger transcript (browser refresh). Keeps login if any."""
+    """Clear the messenger transcript and start a new thread. Keeps login if any."""
     thread_id = _reset_chat_session(request)
     return {"ok": True, "thread_id": thread_id, "messages": []}
 
 
-@app.post("/api/faq")
-def api_faq(body: FaqBody, request: Request) -> dict:
-    """FAQ chips stub — agent/FAQ layer removed pending redesign."""
-    del body, request
-    raise HTTPException(status_code=501, detail=_CHAT_UNWIRED)
-
-
 @app.post("/api/chat")
-def api_chat(request: Request, body: ChatBody) -> dict:
-    """Chat stub — agent removed; booking tools remain in chat_tools."""
+def api_chat(
+    request: Request,
+    body: ChatBody,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(current_user),
+    agent: ClinicAgent = Depends(get_chat_agent),
+) -> dict:
+    """Run one chat turn through ClinicAgent."""
     thread_id = request.session.get(SESSION_THREAD_KEY)
     if not isinstance(thread_id, str) or not thread_id:
         thread_id = _new_thread_id()
         request.session[SESSION_THREAD_KEY] = thread_id
-    reply = _CHAT_UNWIRED
-    _append_display(request, "user", body.message)
-    _append_display(request, "bot", reply)
-    return {"reply": reply, "thread_id": thread_id}
+
+    _append_display(request, "user", _user_display_text(body.message))
+    try:
+        result = agent.run_one_turn(
+            message=body.message,
+            session=request.session,
+            db=db,
+            thread_id=thread_id,
+            user=user,
+        )
+    except Exception as exc:
+        logger.exception("chat turn failed thread_id=%s", thread_id)
+        reply = _CHAT_UNAVAILABLE
+        _append_display(request, "bot", reply)
+        raise HTTPException(status_code=502, detail=_CHAT_UNAVAILABLE) from exc
+
+    _append_display(request, "bot", result.reply)
+    return {
+        "reply": result.reply,
+        "thread_id": result.thread_id,
+        "can_book_now": result.can_book_now,
+    }
+
+
+@app.post("/api/voice/transcribe")
+async def api_voice_transcribe(
+    request: Request,
+    file: UploadFile = File(...),
+) -> dict[str, str]:
+    """Transcribe uploaded audio to text (does not call the chat agent)."""
+    settings = _voice_settings(request)
+    if not settings.enabled:
+        raise HTTPException(status_code=503, detail="Voice is disabled.")
+
+    audio = await file.read()
+    if not audio:
+        raise HTTPException(status_code=400, detail="Audio file is empty.")
+    if len(audio) > _MAX_VOICE_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Audio file is too large.")
+
+    filename = file.filename or "audio.webm"
+    content_type = file.content_type or "application/octet-stream"
+    try:
+        text = transcribe_audio(
+            audio,
+            filename=filename,
+            content_type=content_type,
+            settings=settings,
+        )
+    except VoiceError as exc:
+        raise HTTPException(status_code=502, detail=_VOICE_UNAVAILABLE) from exc
+
+    if not text:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not hear speech. Try again or type your message.",
+        )
+    return {"text": text}
+
+
+@app.post("/api/voice/speak")
+def api_voice_speak(request: Request, body: SpeakBody) -> Response:
+    """Synthesize Piper WAV for reply text (does not call the chat agent)."""
+    settings = _voice_settings(request)
+    if not settings.enabled:
+        raise HTTPException(status_code=503, detail="Voice is disabled.")
+
+    try:
+        audio = synthesize_speech(body.text, settings=settings)
+    except VoiceError as exc:
+        raise HTTPException(status_code=502, detail=_VOICE_UNAVAILABLE) from exc
+
+    return Response(content=audio, media_type="audio/wav")
 
 
 @app.post("/auth/login")
@@ -387,14 +640,7 @@ def api_book(
         )
     except (BookingError, AuthError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {
-        "id": booking.id,
-        "status": booking.status,
-        "patient_email": booking.patient_email,
-        "user_id": booking.user_id,
-        "starts_at": booking.starts_at.isoformat(),
-        "ends_at": booking.ends_at.isoformat(),
-    }
+    return booking_created_dict(booking)
 
 
 @app.post("/api/bookings/{booking_id}/cancel")
@@ -410,7 +656,7 @@ def api_cancel(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     except BookingError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"id": booking.id, "status": booking.status}
+    return booking_cancelled_dict(booking)
 
 
 @app.post("/api/bookings/{booking_id}/reschedule")
@@ -427,12 +673,7 @@ def api_reschedule(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     except BookingError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {
-        "id": booking.id,
-        "status": booking.status,
-        "starts_at": booking.starts_at.isoformat(),
-        "ends_at": booking.ends_at.isoformat(),
-    }
+    return booking_rescheduled_dict(booking)
 
 
 def run() -> None:

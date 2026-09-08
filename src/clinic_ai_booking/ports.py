@@ -1,4 +1,4 @@
-"""Swap points for calendar and email adapters (fakes now; Google/Outlook later)."""
+"""Swap points for calendar and email adapters (fakes or real Google/Outlook)."""
 
 from typing import Protocol
 

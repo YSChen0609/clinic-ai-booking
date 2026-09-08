@@ -9,17 +9,32 @@
     </header>
     <div id="chat-messages" class="chat-messages" role="log" aria-live="polite">
       <div class="chat-bubble bot">
-        Hello. I can help with clinic services, availability, and booking. How can I help?
+        <span class="chat-bubble-text">Hello. I can help with clinic services, availability, and booking. How can I help?</span>
+        <button type="button" class="chat-speak" aria-label="Play reply" title="Play reply" data-speak-state="play">
+          <svg class="chat-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M8 5v14l11-7z" fill="currentColor"/>
+          </svg>
+        </button>
       </div>
     </div>
     <div id="chat-faq-chips" class="chat-faq-chips" aria-label="Quick questions">
-      <button type="button" class="chat-faq-chip chat-faq-chip--services" data-faq="services">Services</button>
-      <button type="button" class="chat-faq-chip chat-faq-chip--doctors" data-faq="professionals">Doctors</button>
-      <button type="button" class="chat-faq-chip chat-faq-chip--hours" data-faq="hours">Hours</button>
+      <button type="button" class="chat-faq-chip chat-faq-chip--services" data-faq-token="FAQ_SERVICES" data-faq-label="Services">Services</button>
+      <button type="button" class="chat-faq-chip chat-faq-chip--doctors" data-faq-token="FAQ_DOCTOR" data-faq-label="Doctors">Doctors</button>
+      <button type="button" class="chat-faq-chip chat-faq-chip--hours" data-faq-token="FAQ_HOURS" data-faq-label="Hours">Hours</button>
     </div>
     <form id="chat-form" class="chat-form" autocomplete="off">
-      <input id="chat-input" type="text" name="message" placeholder="Type a message…" maxlength="500" required>
-      <button type="submit">Send</button>
+      <button type="button" id="chat-mic" class="chat-mic" aria-pressed="false" aria-label="Start recording" title="Start recording" data-mic-state="mic">
+        <svg class="chat-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z" fill="currentColor"/>
+        </svg>
+      </button>
+      <textarea id="chat-input" name="message" placeholder="Type a message…" maxlength="500" rows="1" required></textarea>
+      <button type="submit" id="chat-send" class="chat-send" aria-label="Send message" title="Send message">
+        <svg class="chat-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" fill="currentColor"/>
+        </svg>
+      </button>
     </form>
+    <p id="chat-voice-status" class="chat-voice-status" hidden aria-live="polite"></p>
   </div>
 </aside>

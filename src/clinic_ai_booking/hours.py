@@ -37,6 +37,12 @@ def clinic_datetime(day: date, clock: time) -> datetime:
     return datetime.combine(day, clock, tzinfo=TIMEZONE)
 
 
+def clinic_today(now: datetime | None = None) -> date:
+    """Return today's calendar date in Asia/Taipei."""
+    clock = now.astimezone(TIMEZONE) if now is not None else datetime.now(TIMEZONE)
+    return clock.date()
+
+
 def day_range(day: date) -> tuple[datetime, datetime]:
     """Return [day 00:00, next day 00:00) in clinic time."""
     start = clinic_datetime(day, time.min)

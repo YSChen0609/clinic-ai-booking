@@ -449,7 +449,7 @@ def test_list_patient_appointments_for_reminders(db_session: Session) -> None:
 
 def test_rejects_rebooking_same_slot_and_reminds(db_session: Session) -> None:
     existing = _book(db_session, clock=time(9, 0))
-    with pytest.raises(BookingError, match="already have a booking at that time"):
+    with pytest.raises(BookingError, match="already have booking"):
         _book(db_session, clock=time(9, 0))
     rows = list_patient_appointments(db_session, PATIENT["patient_email"])
     assert len(rows) == 1
@@ -480,7 +480,7 @@ def test_allows_second_different_service_at_different_time(
 def test_rejects_third_active_booking(db_session: Session) -> None:
     _book(db_session, service="A", clock=time(9, 0))
     _book(db_session, service="B", clock=time(14, 0))
-    with pytest.raises(BookingError, match="at most two different services"):
+    with pytest.raises(BookingError, match="limit is two"):
         book_appointment(
             db_session,
             professional_slug="senior-1",
@@ -494,7 +494,7 @@ def test_rejects_second_booking_that_overlaps_patient_time(
     db_session: Session,
 ) -> None:
     _book(db_session, slug="junior", service="A", clock=time(9, 0))
-    with pytest.raises(BookingError, match="overlaps your existing booking"):
+    with pytest.raises(BookingError, match="overlaps your booking"):
         book_appointment(
             db_session,
             professional_slug="senior-1",

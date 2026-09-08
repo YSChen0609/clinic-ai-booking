@@ -11,13 +11,63 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-clinic}:${POSTGRES_PASSWORD:-clinic_dev_change_me}@db:5432/${POSTGRES_DB:-clinic}
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
+      VOICE_BASE_URL: http://voice:8790
+      VOICE_ENABLED: ${VOICE_ENABLED:-true}
+      VOICE_STT_MODEL: ${VOICE_STT_MODEL:-stt}
+      VOICE_TTS_VOICE: ${VOICE_TTS_VOICE:-en_US-amy-medium}
       TZ: ${TZ:-Asia/Taipei}
       SESSION_SECRET: ${SESSION_SECRET:-clinic-dev-session-secret-change-me}
+      NOTIFY_MODE: ${NOTIFY_MODE:-fake}
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-auto}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REFRESH_TOKEN: ${GOOGLE_REFRESH_TOKEN:-}
+      GOOGLE_CALENDAR_ID: ${GOOGLE_CALENDAR_ID:-primary}
+      GOOGLE_SENDER: ${GOOGLE_SENDER:-}
+      MS_TENANT_ID: ${MS_TENANT_ID:-}
+      MS_CLIENT_ID: ${MS_CLIENT_ID:-}
+      MS_CLIENT_SECRET: ${MS_CLIENT_SECRET:-}
+      MS_USER_UPN: ${MS_USER_UPN:-}
+      MS_REFRESH_TOKEN: ${MS_REFRESH_TOKEN:-}
+      MS_CALENDAR_ID: ${MS_CALENDAR_ID:-}
     depends_on:
       db:
         condition: service_healthy
       ollama:
         condition: service_started
+      voice:
+        condition: service_started
+    restart: unless-stopped
+
+  voice:
+    # GHCR package for voicebox is private (anonymous pull → unauthorized).
+    # Build from the public git tag instead (first build downloads Whisper + Piper).
+    # https://github.com/agjs/voicebox
+    image: clinic-ai-booking-voice:0.2.16
+    build:
+      context: https://github.com/agjs/voicebox.git#v0.2.16
+    environment:
+      VOICEBOX_ALLOW_INSECURE_BIND: "true"
+      VOICEBOX_TTS_ENGINE: piper
+      VOICEBOX_PIPER_VOICE: ${VOICE_TTS_VOICE:-en_US-amy-medium}
+      VOICEBOX_CPU_THREADS: ${VOICEBOX_CPU_THREADS:-4}
+      TZ: ${TZ:-Asia/Taipei}
+    ports:
+      - target: 8790
+        published: "${VOICE_PORT:-8790}"
+        protocol: tcp
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8790/health', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
     restart: unless-stopped
 
   db:

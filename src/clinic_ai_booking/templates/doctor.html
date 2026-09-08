@@ -4,7 +4,41 @@
   <p class="eyebrow">{{ doctor.role }}</p>
   <h1>{{ doctor.name }}</h1>
   <p>{{ doctor.summary }}</p>
-  <p class="note">Calendar and booking will appear in a later stage.</p>
   <p><a href="/">← Back to intro</a></p>
+
+  <section class="busy-calendar" aria-label="Busy calendar for {{ doctor.name }}">
+    <div class="busy-calendar-header">
+      <h2>Busy times</h2>
+      <p class="note">
+        Shows this professional’s booked blocks only (no patient names).
+        Clinic hours Mon–Fri 09:00–20:00 {{ timezone }}.
+      </p>
+      <nav class="busy-calendar-nav" aria-label="Calendar week">
+        <a href="/doctors/{{ doctor.slug }}?from={{ calendar_prev_from }}">← Previous</a>
+        <span>{{ calendar_from.strftime("%d %b %Y") }} – {{ calendar_to.strftime("%d %b %Y") }}</span>
+        <a href="/doctors/{{ doctor.slug }}?from={{ calendar_next_from }}">Next →</a>
+      </nav>
+    </div>
+    <div class="busy-calendar-grid">
+      {% for day in calendar_days %}
+      <article class="busy-day{% if not day.is_open %} busy-day--closed{% endif %}">
+        <h3>{{ day.label }}</h3>
+        {% if not day.is_open %}
+        <p class="busy-closed">Clinic closed (weekend)</p>
+        {% elif day.blocks %}
+        <ul class="busy-blocks">
+          {% for block in day.blocks %}
+          <li>
+            <span class="busy-block">Busy {{ block.starts_at.strftime("%H:%M") }}–{{ block.ends_at.strftime("%H:%M") }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="busy-empty">No busy blocks</p>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+  </section>
 </section>
 {% endblock %}
