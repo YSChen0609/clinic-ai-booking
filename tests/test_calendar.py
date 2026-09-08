@@ -7,12 +7,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from clinic_ai_booking.booking import (
+from clinic_ai_booking.domain.booking import (
     BookingError,
     book_appointment,
     list_busy_blocks_range,
 )
-from clinic_ai_booking.hours import clinic_datetime
+from clinic_ai_booking.domain.hours import clinic_datetime
 from clinic_ai_booking.main import app, get_db, set_engine
 
 MONDAY = date(2026, 8, 31)

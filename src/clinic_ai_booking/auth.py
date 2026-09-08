@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from clinic_ai_booking.models import Booking, User
+from clinic_ai_booking.domain.models import Booking, User
 
 LOGIN_REQUIRED_MESSAGE = "Please log in to cancel or reschedule."
 SESSION_USER_ID_KEY = "user_id"
@@ -88,7 +88,7 @@ def user_owns_booking(user: User, booking: Booking) -> bool:
 
 def cancel_for_user(session: Session, booking_id: int, user: User | None) -> Booking:
     """Cancel when logged in and the booking is theirs; visitors get AuthError."""
-    from clinic_ai_booking.booking import cancel_appointment
+    from clinic_ai_booking.domain.booking import cancel_appointment
 
     actor = require_login(user)
     booking = session.get(Booking, booking_id)
@@ -106,7 +106,7 @@ def reschedule_for_user(
     user: User | None,
 ) -> Booking:
     """Reschedule when logged in and the booking is theirs; visitors get AuthError."""
-    from clinic_ai_booking.booking import reschedule_appointment
+    from clinic_ai_booking.domain.booking import reschedule_appointment
 
     actor = require_login(user)
     booking = session.get(Booking, booking_id)

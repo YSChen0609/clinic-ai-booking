@@ -1,6 +1,6 @@
 # Booking rules
 
-Patient-facing and agent checklist. Engine enforces these in `book_appointment`.
+Patient-facing and agent checklist. Engine enforces these in `domain/booking.py`.
 
 ## Hours and slots
 

@@ -13,7 +13,7 @@ from clinic_ai_booking.chat.resolve import (
     resolve_day_intent,
     wants_other_slot,
 )
-from clinic_ai_booking.hours import clinic_datetime
+from clinic_ai_booking.domain.hours import clinic_datetime
 
 
 def test_next_friday_from_monday_is_eleven_days() -> None:

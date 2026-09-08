@@ -2,7 +2,7 @@
 
 from typing import Protocol
 
-from clinic_ai_booking.models import Booking
+from clinic_ai_booking.domain.models import Booking
 
 
 class CalendarPort(Protocol):

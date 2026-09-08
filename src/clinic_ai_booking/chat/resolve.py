@@ -7,9 +7,9 @@ from datetime import date, datetime, time, timedelta
 
 from sqlalchemy.orm import Session
 
-from clinic_ai_booking.booking import list_professionals, list_services
+from clinic_ai_booking.domain.booking import list_professionals, list_services
 from clinic_ai_booking.chat.catalog import reject_unknown_catalog
-from clinic_ai_booking.hours import TIMEZONE, clinic_datetime, to_clinic
+from clinic_ai_booking.domain.hours import TIMEZONE, clinic_datetime, to_clinic
 
 _TIME_BANDS = frozenset({"morning", "afternoon", "evening"})
 # Concrete clock only — not "morning" / "11" alone without am/pm or :

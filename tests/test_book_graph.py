@@ -6,7 +6,7 @@ from datetime import date, time
 
 from sqlalchemy.orm import Session
 
-from clinic_ai_booking.booking import (
+from clinic_ai_booking.domain.booking import (
     book_appointment as engine_book,
     list_available_starts as engine_list_available_starts,
 )
@@ -20,7 +20,7 @@ from clinic_ai_booking.chat.book_graph import (
 from clinic_ai_booking.chat.context import ChatContext
 from clinic_ai_booking.chat.facts import empty_facts
 from clinic_ai_booking.chat.resolve import resolve_professional_slug
-from clinic_ai_booking.hours import clinic_datetime, to_clinic
+from clinic_ai_booking.domain.hours import clinic_datetime, to_clinic
 
 MONDAY = date(2026, 8, 31)
 

@@ -1,5 +1,6 @@
 .git
 .venv
+.venv-*
 __pycache__
 *.py[cod]
 .pytest_cache
@@ -8,7 +9,9 @@ __pycache__
 .env
 *.md
 !README.md
+docs
 prompts
 .cursor
 tests
 .github
+TODOS.md

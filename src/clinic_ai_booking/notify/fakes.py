@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from clinic_ai_booking.models import Booking
+from clinic_ai_booking.domain.models import Booking
 
 logger = logging.getLogger(__name__)
 

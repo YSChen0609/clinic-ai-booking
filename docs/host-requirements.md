@@ -6,13 +6,15 @@ Images travel; **drivers and Docker GPU plumbing do not**. Base Compose = CPU. G
 
 Sources: [Compose GPU](https://docs.docker.com/compose/how-tos/gpu-support/), [Docker Desktop GPU (Windows/WSL2)](https://docs.docker.com/desktop/features/gpu/), [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/index.html), [CUDA on WSL](https://docs.nvidia.com/cuda/wsl-user-guide/index.html).
 
+Product install: [external.md](external.md). Architecture: [internal.md](internal.md).
+
 ---
 
 ## Quick pick: CPU or GPU
 
 | Mode | When | Compose files | Speed (7B chat) |
 |------|------|---------------|-----------------|
-| **CPU** | Any Docker host; no NVIDIA; GPU overlay fails | `compose.yml` only | Usable but often slow (tool loops stack latency) |
+| **CPU** | Any Docker host; no NVIDIA; GPU overlay fails | `compose.yml` only | Usable but often slow |
 | **GPU** | NVIDIA host ready (checklist below) | `compose.yml` + `compose.gpu.yml` | Much snappier if the model fits in VRAM |
 
 Default model: `qwen2.5:7b` (`OLLAMA_MODEL` in `.env`). Site: http://localhost:8000
@@ -131,7 +133,7 @@ Native Ollama uses the host driver (no toolkit). Point the **app** at it:
 2. In Compose for `app`, set `OLLAMA_BASE_URL` (e.g. `http://host.docker.internal:11434` on Docker Desktop).
 3. You can leave Compose `ollama` unused or stop that service.
 
-Env vars `OLLAMA_BASE_URL` / `OLLAMA_MODEL` are for when you re-wire an LLM adapter (chat agent currently unwired).
+Env vars `OLLAMA_BASE_URL` / `OLLAMA_MODEL` point the app at whatever Ollama you run (Compose service by default).
 
 ---
 

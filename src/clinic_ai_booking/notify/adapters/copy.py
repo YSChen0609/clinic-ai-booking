@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from clinic_ai_booking.hours import TIMEZONE_NAME, to_clinic
-from clinic_ai_booking.models import STATUS_PENDING_DOCTOR, Booking
+from clinic_ai_booking.domain.hours import TIMEZONE_NAME, to_clinic
+from clinic_ai_booking.domain.models import STATUS_PENDING_DOCTOR, Booking
 
 
 def booking_marker(booking_id: int) -> str:

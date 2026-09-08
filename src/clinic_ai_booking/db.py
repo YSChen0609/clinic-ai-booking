@@ -10,8 +10,8 @@ from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from clinic_ai_booking.doctors import DOCTORS
-from clinic_ai_booking.models import Base, Professional, Service
+from clinic_ai_booking.domain.doctors import DOCTORS
+from clinic_ai_booking.domain.models import Base, Professional, Service
 
 # code, duration_minutes, seniors_only — A/B all pros; C–E seniors only.
 SERVICE_DEFS: tuple[tuple[str, int, bool], ...] = (

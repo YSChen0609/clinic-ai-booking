@@ -11,7 +11,7 @@ from langchain_core.messages import ToolMessage
 from sqlalchemy.orm import Session
 
 from clinic_ai_booking.auth import get_or_create_user
-from clinic_ai_booking.booking import book_appointment as engine_book
+from clinic_ai_booking.domain.booking import book_appointment as engine_book
 from clinic_ai_booking.chat.context import ChatContext, load_context
 from clinic_ai_booking.chat.tools import (
     book_appointment,
@@ -22,8 +22,8 @@ from clinic_ai_booking.chat.tools import (
     reschedule_appointment,
     update_context,
 )
-from clinic_ai_booking.hours import clinic_datetime
-from clinic_ai_booking.models import STATUS_CANCELLED, STATUS_CONFIRMED
+from clinic_ai_booking.domain.hours import clinic_datetime
+from clinic_ai_booking.domain.models import STATUS_CANCELLED, STATUS_CONFIRMED
 
 MONDAY = date(2026, 8, 31)
 SATURDAY = date(2026, 8, 29)

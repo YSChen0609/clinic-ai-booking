@@ -17,7 +17,7 @@ from clinic_ai_booking.chat.context import ChatContext, load_context, save_conte
 from clinic_ai_booking.chat.facts import empty_facts
 from clinic_ai_booking.chat.turn_graph import build_turn_graph
 from clinic_ai_booking.config import ChatSettings
-from clinic_ai_booking.models import User
+from clinic_ai_booking.domain.models import User
 
 logger = logging.getLogger(__name__)
 

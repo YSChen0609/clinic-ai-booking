@@ -1,6 +1,6 @@
 from datetime import date, time, timedelta
 
-from clinic_ai_booking.hours import (
+from clinic_ai_booking.domain.hours import (
     CLOSE,
     OPEN,
     OVERTIME_END,

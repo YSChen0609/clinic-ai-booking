@@ -9,18 +9,18 @@ import httpx
 import pytest
 from sqlalchemy.orm import Session
 
-from clinic_ai_booking.adapters.copy import google_event_id
-from clinic_ai_booking.adapters.google import GoogleAdapterError, GoogleCalendar, GoogleEmail
-from clinic_ai_booking.adapters.outlook import (
+from clinic_ai_booking.notify.adapters.copy import google_event_id
+from clinic_ai_booking.notify.adapters.google import GoogleAdapterError, GoogleCalendar, GoogleEmail
+from clinic_ai_booking.notify.adapters.outlook import (
     OutlookAdapterError,
     OutlookCalendar,
     OutlookEmail,
 )
-from clinic_ai_booking.adapters.tokens import GoogleTokenSource, MicrosoftTokenSource
-from clinic_ai_booking.booking import book_appointment
-from clinic_ai_booking.fakes import FakeCalendar, FakeEmail
-from clinic_ai_booking.hours import clinic_datetime
-from clinic_ai_booking.models import STATUS_PENDING_DOCTOR
+from clinic_ai_booking.notify.adapters.tokens import GoogleTokenSource, MicrosoftTokenSource
+from clinic_ai_booking.domain.booking import book_appointment
+from clinic_ai_booking.notify.fakes import FakeCalendar, FakeEmail
+from clinic_ai_booking.domain.hours import clinic_datetime
+from clinic_ai_booking.domain.models import STATUS_PENDING_DOCTOR
 from clinic_ai_booking.notify import (
     notify_booking_created,
     reset_ports_to_fakes,
@@ -258,7 +258,7 @@ def test_notify_created_uses_ports_only() -> None:
 
 
 def _stub_booking(booking_id: int, *, status: str):
-    from clinic_ai_booking.models import Booking, Professional, Service
+    from clinic_ai_booking.domain.models import Booking, Professional, Service
 
     pro = Professional(id=1, slug="junior", name="Dr. Alex Chen", is_senior=False)
     svc = Service(id=1, code="A", duration_minutes=60, seniors_only=False)

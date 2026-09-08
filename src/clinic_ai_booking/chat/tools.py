@@ -18,7 +18,7 @@ from clinic_ai_booking.auth import (
     normalize_name,
     reschedule_for_user,
 )
-from clinic_ai_booking.booking import (
+from clinic_ai_booking.domain.booking import (
     BookingError,
     DayAvailability,
     PatientAppointment,
@@ -42,7 +42,7 @@ from clinic_ai_booking.chat.responses import (
     PATIENT_EMAIL_UNKNOWN,
     draft_missing_message,
 )
-from clinic_ai_booking.hours import (
+from clinic_ai_booking.domain.hours import (
     explain_clinic_day as hours_explain_clinic_day,
     explain_clinic_start as hours_explain_clinic_start,
     to_clinic,

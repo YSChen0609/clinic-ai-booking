@@ -9,8 +9,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from clinic_ai_booking.hours import TIMEZONE
-from clinic_ai_booking.models import User
+from clinic_ai_booking.domain.hours import TIMEZONE
+from clinic_ai_booking.domain.models import User
 
 # Legacy sticky keys — purged on load/save/reset so old cookies cannot haunt chat.
 SESSION_VISITOR_NAME_KEY = "visitor_name"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from clinic_ai_booking.booking import list_professionals, list_services
+from clinic_ai_booking.domain.booking import list_professionals, list_services
 
 
 def reject_unknown_catalog(

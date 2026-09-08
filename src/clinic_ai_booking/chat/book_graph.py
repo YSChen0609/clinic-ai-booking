@@ -8,7 +8,7 @@ from typing import Any, Literal
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 
-from clinic_ai_booking.booking import (
+from clinic_ai_booking.domain.booking import (
     BookingError,
     book_appointment as engine_book,
     booking_created_dict,
@@ -29,7 +29,7 @@ from clinic_ai_booking.chat.resolve import (
     parse_starts_at,
 )
 from clinic_ai_booking.chat.state import TurnState
-from clinic_ai_booking.hours import explain_clinic_day, to_clinic
+from clinic_ai_booking.domain.hours import explain_clinic_day, to_clinic
 
 logger = logging.getLogger(__name__)
 

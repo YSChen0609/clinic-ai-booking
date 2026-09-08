@@ -1,4 +1,4 @@
-# AI coding Agent rules
+# AI coding Agent rules / local staging prompts (not part of the product)
 .cursor/
 prompts/
 
@@ -157,6 +157,8 @@ activemq-data/
 !.env.example
 .envrc
 .venv
+.venv-*/
+.venv-ci/
 env/
 venv/
 ENV/

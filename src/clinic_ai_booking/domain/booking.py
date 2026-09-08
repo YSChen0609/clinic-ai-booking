@@ -18,7 +18,7 @@ Reschedule (back-and-forth):
 One-shot when the new start is already agreed:
 reschedule_appointment(current_id, new_start) — books first, then cancels.
 
-Patient caps (see booking_rules.md): at most two active bookings, different
+Patient caps (see docs/booking_rules.md): at most two active bookings, different
 services, different times; same service → reschedule, do not rebook.
 """
 
@@ -31,7 +31,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from clinic_ai_booking.auth import get_or_create_user
-from clinic_ai_booking.hours import (
+from clinic_ai_booking.domain.hours import (
     CLOSE,
     OVERTIME_END,
     candidate_starts,
@@ -44,7 +44,7 @@ from clinic_ai_booking.hours import (
     start_during_open_hours,
     to_clinic,
 )
-from clinic_ai_booking.models import (
+from clinic_ai_booking.domain.models import (
     ACTIVE_STATUSES,
     STATUS_CANCELLED,
     STATUS_CONFIRMED,

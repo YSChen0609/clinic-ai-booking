@@ -6,14 +6,14 @@ import logging
 
 import httpx
 
-from clinic_ai_booking.adapters.fanout import FanoutCalendar, FanoutEmail
-from clinic_ai_booking.adapters.google import GoogleCalendar, GoogleEmail
-from clinic_ai_booking.adapters.outlook import OutlookCalendar, OutlookEmail
-from clinic_ai_booking.adapters.tokens import GoogleTokenSource, MicrosoftTokenSource
+from clinic_ai_booking.notify.adapters.fanout import FanoutCalendar, FanoutEmail
+from clinic_ai_booking.notify.adapters.google import GoogleCalendar, GoogleEmail
+from clinic_ai_booking.notify.adapters.outlook import OutlookCalendar, OutlookEmail
+from clinic_ai_booking.notify.adapters.tokens import GoogleTokenSource, MicrosoftTokenSource
 from clinic_ai_booking.config import NotifySettings
-from clinic_ai_booking.fakes import FakeCalendar, FakeEmail
-from clinic_ai_booking.notify import set_ports
-from clinic_ai_booking.ports import CalendarPort, EmailPort
+from clinic_ai_booking.notify.fakes import FakeCalendar, FakeEmail
+from clinic_ai_booking.notify.ports import CalendarPort, EmailPort
+from clinic_ai_booking.notify.service import set_ports
 
 logger = logging.getLogger(__name__)
 

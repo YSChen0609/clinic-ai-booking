@@ -27,7 +27,7 @@ from clinic_ai_booking.auth import (
     login_with_name_email,
     reschedule_for_user,
 )
-from clinic_ai_booking.booking import (
+from clinic_ai_booking.domain.booking import (
     BookingError,
     BusyBlock,
     book_appointment,
@@ -43,12 +43,12 @@ from clinic_ai_booking.chat.deps import get_chat_agent
 from clinic_ai_booking.chat.factory import create_chat_agent, shutdown_chat_agent
 from clinic_ai_booking.chat.responses import faq_label
 from clinic_ai_booking.chat.session_keys import SESSION_CHAT_DISPLAY_KEY, SESSION_THREAD_KEY
-from clinic_ai_booking.adapters.wiring import close_adapter_http, install_ports_from_env
+from clinic_ai_booking.notify.adapters.wiring import close_adapter_http, install_ports_from_env
 from clinic_ai_booking.config import ChatSettings, NotifySettings, VoiceSettings
 from clinic_ai_booking.db import apply_schema_and_seed, database_url_from_env
-from clinic_ai_booking.doctors import DOCTORS, DOCTORS_BY_SLUG
-from clinic_ai_booking.hours import TIMEZONE_NAME, clinic_today, is_weekday, to_clinic
-from clinic_ai_booking.models import User
+from clinic_ai_booking.domain.doctors import DOCTORS, DOCTORS_BY_SLUG
+from clinic_ai_booking.domain.hours import TIMEZONE_NAME, clinic_today, is_weekday, to_clinic
+from clinic_ai_booking.domain.models import User
 from clinic_ai_booking.voice import VoiceError, synthesize_speech, transcribe_audio
 
 # Public doctor calendars show this many days starting at `from`.

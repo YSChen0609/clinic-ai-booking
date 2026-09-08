@@ -15,10 +15,10 @@ from clinic_ai_booking.auth import (
     login_with_name_email,
     reschedule_for_user,
 )
-from clinic_ai_booking.booking import book_appointment
-from clinic_ai_booking.hours import clinic_datetime
+from clinic_ai_booking.domain.booking import book_appointment
+from clinic_ai_booking.domain.hours import clinic_datetime
 from clinic_ai_booking.main import app, get_db, set_engine
-from clinic_ai_booking.models import User
+from clinic_ai_booking.domain.models import User
 
 MONDAY = date(2026, 8, 31)
 NAME = "Pat Lee"

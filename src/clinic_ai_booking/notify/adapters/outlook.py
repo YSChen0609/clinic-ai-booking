@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 import httpx
 
-from clinic_ai_booking.adapters.copy import (
+from clinic_ai_booking.notify.adapters.copy import (
     booking_marker,
     email_body_cancelled,
     email_body_created,
@@ -20,9 +20,9 @@ from clinic_ai_booking.adapters.copy import (
     event_description,
     event_summary,
 )
-from clinic_ai_booking.adapters.tokens import MicrosoftTokenSource
-from clinic_ai_booking.hours import TIMEZONE_NAME, to_clinic
-from clinic_ai_booking.models import STATUS_CONFIRMED, Booking
+from clinic_ai_booking.notify.adapters.tokens import MicrosoftTokenSource
+from clinic_ai_booking.domain.hours import TIMEZONE_NAME, to_clinic
+from clinic_ai_booking.domain.models import STATUS_CONFIRMED, Booking
 
 logger = logging.getLogger(__name__)
 

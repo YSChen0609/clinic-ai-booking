@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from clinic_ai_booking.models import Booking
-from clinic_ai_booking.ports import CalendarPort, EmailPort
+from clinic_ai_booking.domain.models import Booking
+from clinic_ai_booking.notify.ports import CalendarPort, EmailPort
 
 
 @dataclass

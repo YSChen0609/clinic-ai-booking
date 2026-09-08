@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from clinic_ai_booking.booking import (
+from clinic_ai_booking.domain.booking import (
     BookingError,
     BusyBlock,
     book_appointment,
@@ -17,8 +17,8 @@ from clinic_ai_booking.booking import (
     list_patient_appointments,
     reschedule_appointment,
 )
-from clinic_ai_booking.hours import clinic_datetime
-from clinic_ai_booking.models import (
+from clinic_ai_booking.domain.hours import clinic_datetime
+from clinic_ai_booking.domain.models import (
     STATUS_CANCELLED,
     STATUS_CONFIRMED,
     STATUS_PENDING_DOCTOR,

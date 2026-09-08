@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import logging
 
-from clinic_ai_booking.booking import list_professionals, list_services
+from clinic_ai_booking.domain.booking import list_professionals, list_services
 from clinic_ai_booking.chat.context import ChatContext
-from clinic_ai_booking.doctors import DOCTORS
-from clinic_ai_booking.hours import BREAKS, CLOSE, OPEN, TIMEZONE_NAME
+from clinic_ai_booking.domain.doctors import DOCTORS
+from clinic_ai_booking.domain.hours import BREAKS, CLOSE, OPEN, TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
 

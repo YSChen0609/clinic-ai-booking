@@ -13,10 +13,10 @@ import sys
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from clinic_ai_booking.booking import BookingError, book_appointment, list_busy_blocks
+from clinic_ai_booking.domain.booking import BookingError, book_appointment, list_busy_blocks
 from clinic_ai_booking.db import apply_schema_and_seed, host_postgres_url, load_host_env
-from clinic_ai_booking.hours import clinic_datetime
-from clinic_ai_booking.models import Booking, Professional, Service, User
+from clinic_ai_booking.domain.hours import clinic_datetime
+from clinic_ai_booking.domain.models import Booking, Professional, Service, User
 
 ROOT = Path(__file__).resolve().parents[1]
 SMOKE_EMAIL = "smoke@example.com"

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from clinic_ai_booking.fakes import FakeCalendar, FakeEmail
-from clinic_ai_booking.models import STATUS_CONFIRMED, Booking
-from clinic_ai_booking.ports import CalendarPort, EmailPort
+from clinic_ai_booking.notify.fakes import FakeCalendar, FakeEmail
+from clinic_ai_booking.domain.models import STATUS_CONFIRMED, Booking
+from clinic_ai_booking.notify.ports import CalendarPort, EmailPort
 
 _calendar: CalendarPort = FakeCalendar()
 _email: EmailPort = FakeEmail()

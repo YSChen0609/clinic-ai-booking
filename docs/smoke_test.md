@@ -1,8 +1,8 @@
-# Smoke test — stage 2 auth
+# Smoke test — MVP end-to-end
 
-Manual checks after `docker compose up --build -d` (app on http://localhost:8000).
+Manual checks after `docker compose up --build -d` (app on http://localhost:8000). Covers auth, chat, busy calendars, voice, and optional real notify.
 
-Security note: **no-password login (name + email only) is MVP-only.** Do not use this against the public internet without password or OAuth (see `TODOS.md`).
+Security note: **no-password login (name + email only) is MVP-only.** Do not use this against the public internet without password or OAuth (see [TODOS.md](../TODOS.md)).
 
 ## Browse as visitor
 
@@ -44,13 +44,13 @@ curl -s -o - -w "\nHTTP %{http_code}\n" -X POST http://localhost:8000/api/bookin
 
 Expect HTTP **401** and detail: `Please log in to cancel or reschedule.`
 
-Chat (after Ollama model is pulled): as a visitor, ask to reschedule or cancel — the bot should tell you to log in (middleware + tools).
+Chat (after Ollama model is pulled): as a visitor, ask to reschedule or cancel — the bot should tell you to log in (turn graph; cancel/reschedule not fully implemented).
 
 ## Chat (agent)
 
 `POST /api/chat` runs `ClinicAgent.run_one_turn` (Ollama required).
 
-Flow: FAQ/scope extract → in-scope booking StateGraph over `booking.py` → client reply.
+Flow: FAQ/scope extract → in-scope booking StateGraph over `domain/booking.py` → client reply.
 Multi-turn: sticky `booking_draft` + identity on the session cookie; graph stops when the user must answer.
 
 Suggested smoke path (messenger or `POST /api/chat`):
@@ -130,7 +130,7 @@ If mic permission is denied or `VOICE_ENABLED=false`, typing + Send must still w
 
 Requires secrets in `.env` (from `.env.example`). Do **not** commit `.env`.
 
-**How to get client id / secret / refresh token:** see [oauth-setup.md](oauth-setup.md).
+**How to get client id / secret / refresh token:** see [oauth-setup.md](oauth-setup.md) (also summarized in [external.md](external.md)).
 
 1. Follow [oauth-setup.md](oauth-setup.md); set `NOTIFY_MODE=real`.
 2. Recreate the app so env is picked up:
