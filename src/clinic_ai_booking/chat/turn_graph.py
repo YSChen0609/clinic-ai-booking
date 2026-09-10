@@ -19,7 +19,13 @@ from clinic_ai_booking.chat.extract import TurnExtract, apply_extract, extract_t
 from clinic_ai_booking.chat.facts import empty_facts
 from clinic_ai_booking.chat.history import compress_chat_history
 from clinic_ai_booking.chat.reply import render_reply
-from clinic_ai_booking.chat.resolve import is_explicit_cancel_or_reschedule
+from clinic_ai_booking.chat.resolve import (
+    detect_all_services_in_text,
+    detect_unknown_service_letter,
+    doctor_suggest_followup,
+    is_explicit_cancel_or_reschedule,
+    unknown_service_message,
+)
 from clinic_ai_booking.chat.responses import OUT_OF_SCOPE, faq_reply, is_faq_token
 from clinic_ai_booking.chat.state import TurnState
 
@@ -54,6 +60,33 @@ def build_turn_graph(
 
         recent = compress_chat_history(state.get("messages"))
         extracted = extract_turn(model, text, ctx, recent_history=recent)
+
+        unknown = detect_unknown_service_letter(text)
+        if unknown:
+            # Stay in clinic scope; closed select rejects letters outside A–E.
+            apply_extract(ctx, extracted, user_text=text)
+            msg = unknown_service_message(ctx.db, unknown)
+            if (
+                ctx.draft.professional_slug
+                and not ctx.draft.professional_confirmed
+            ):
+                msg += doctor_suggest_followup(
+                    ctx.db, slug=ctx.draft.professional_slug
+                )
+            facts["status"] = "need_info"
+            facts["missing"] = ["service_code"]
+            if ctx.draft.professional_slug and not ctx.draft.professional_confirmed:
+                facts["missing"].append("professional_confirm")
+            facts["error"] = msg
+            facts["hint"] = msg
+            return {
+                "in_scope": True,
+                "intent": "book",
+                "facts": facts,
+                "reply": msg,
+                "messages": [AIMessage(content=msg)],
+            }
+
         if not extracted.in_scope:
             return {
                 "in_scope": False,
@@ -71,7 +104,7 @@ def build_turn_graph(
                 if not ctx.is_authenticated
                 else (
                     "Cancel and reschedule are not in the chat booking flow yet. "
-                    "Please use the website after logging in."
+                    "Please use the website to manage your appointment."
                 )
             )
             facts["status"] = "need_info"
@@ -85,6 +118,27 @@ def build_turn_graph(
             }
 
         apply_extract(ctx, extracted, user_text=text)
+        multi = detect_all_services_in_text(ctx.db, text)
+        if len(multi) >= 2:
+            ctx.draft.service_code = None
+            ctx.draft.book_confirmed = False
+            listed = ", ".join(multi[:-1]) + f" and {multi[-1]}"
+            msg = (
+                "I can book one service at a time "
+                "(you may hold up to two upcoming appointments). "
+                f"You mentioned {listed}. Which should we book first?"
+            )
+            facts["status"] = "need_info"
+            facts["missing"] = ["service_code"]
+            facts["error"] = msg
+            facts["hint"] = msg
+            return {
+                "in_scope": True,
+                "intent": "book",
+                "facts": facts,
+                "reply": msg,
+                "messages": [AIMessage(content=msg)],
+            }
         return {
             "in_scope": True,
             "intent": "book" if extracted.intent in {"cancel", "reschedule"} else extracted.intent,

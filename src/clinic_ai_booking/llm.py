@@ -12,7 +12,9 @@ from clinic_ai_booking.config import ChatSettings
 DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
 
 
-def make_chat_model(*, tag: str | None = None) -> BaseChatModel:
+def make_chat_model(
+    *, tag: str | None = None, temperature: float | None = None
+) -> BaseChatModel:
     """Build the chat model (Ollama by default)."""
     model_tag = tag or ChatSettings.from_env().ollama_model
     base_url = (
@@ -20,6 +22,9 @@ def make_chat_model(*, tag: str | None = None) -> BaseChatModel:
         or os.environ.get("OLLAMA_HOST", "").strip()
         or None
     )
+    kwargs: dict = {}
+    if temperature is not None:
+        kwargs["temperature"] = temperature
     if base_url:
-        return init_chat_model(f"ollama:{model_tag}", base_url=base_url)
-    return init_chat_model(f"ollama:{model_tag}")
+        return init_chat_model(f"ollama:{model_tag}", base_url=base_url, **kwargs)
+    return init_chat_model(f"ollama:{model_tag}", **kwargs)

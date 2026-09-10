@@ -32,6 +32,26 @@ def to_clinic(dt: datetime) -> datetime:
     return dt.astimezone(TIMEZONE)
 
 
+def format_patient_day(day: date) -> str:
+    """Weekday + day month year for patient-facing copy (Asia/Taipei calendar)."""
+    return f"{day.strftime('%A')} {day.day} {day.strftime('%b')} {day.year}"
+
+
+def format_patient_clock(dt: datetime) -> str:
+    """HH:MM in clinic time."""
+    return to_clinic(dt).strftime("%H:%M")
+
+
+def format_patient_span(starts_at: datetime, ends_at: datetime) -> str:
+    """Day plus start–end clocks for one appointment."""
+    local_start = to_clinic(starts_at)
+    local_end = to_clinic(ends_at)
+    return (
+        f"{format_patient_day(local_start.date())}, "
+        f"{local_start.strftime('%H:%M')}–{local_end.strftime('%H:%M')}"
+    )
+
+
 def clinic_datetime(day: date, clock: time) -> datetime:
     """Build an aware datetime on that calendar day in clinic time."""
     return datetime.combine(day, clock, tzinfo=TIMEZONE)

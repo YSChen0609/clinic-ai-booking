@@ -1,0 +1,19 @@
+{
+  "id": "junior_cannot_do_service_c",
+  "description": "Junior + service C should not lock junior for C (smoke step 7).",
+  "turns": [
+    {
+      "user": "Book service C with the junior doctor tomorrow morning",
+      "expect": {
+        "in_scope": true,
+        "status_in": ["need_info", "need_confirm_doctor"],
+        "draft": {
+          "service_code": "C"
+        },
+        "draft_not": {
+          "professional_slug": "junior"
+        }
+      }
+    }
+  ]
+}

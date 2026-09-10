@@ -18,8 +18,9 @@ Reschedule (back-and-forth):
 One-shot when the new start is already agreed:
 reschedule_appointment(current_id, new_start) — books first, then cancels.
 
-Patient caps (see docs/booking_rules.md): at most two active bookings, different
-services, different times; same service → reschedule, do not rebook.
+Patient caps (see docs/booking_rules.md): at most two upcoming bookings
+(ends_at still in the future), different services, different times; same
+service → reschedule, do not rebook. Finished appointments do not count.
 """
 
 from collections.abc import Callable
@@ -34,9 +35,14 @@ from clinic_ai_booking.auth import get_or_create_user
 from clinic_ai_booking.domain.hours import (
     CLOSE,
     OVERTIME_END,
+    SLOT_MINUTES,
+    TIMEZONE,
     candidate_starts,
     day_range,
     ends_after,
+    format_patient_clock,
+    format_patient_day,
+    format_patient_span,
     interval_overlaps_break,
     on_start_grid,
     overlaps,
@@ -62,8 +68,13 @@ from clinic_ai_booking.notify import (
 
 NotifyFn = Callable[[Booking], None]
 
-# At most two active bookings per patient (different services, different times).
+# At most two not-yet-finished bookings per patient (ends_at still in the future).
 MAX_ACTIVE_BOOKINGS_PER_PATIENT = 2
+
+
+def _clinic_now() -> datetime:
+    """Return clinic 'now' for caps and availability (tests may monkeypatch)."""
+    return datetime.now(TIMEZONE)
 
 
 class BookingError(ValueError):
@@ -98,6 +109,27 @@ class DayAvailability:
 
     day: date
     starts: tuple[datetime, ...]
+
+
+@dataclass(frozen=True)
+class BandAvailability:
+    """Duration-aware free starts for one part of day (Plan B offer shape)."""
+
+    start_windows: tuple[tuple[str, str], ...]
+    sample_starts: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DayAvailabilitySummary:
+    """Compact day offer for chat: weekday + bands of start windows/samples."""
+
+    day: date
+    weekday: str
+    professional_slug: str
+    service_code: str
+    duration_minutes: int
+    grid_minutes: int
+    bands: dict[str, BandAvailability]
 
 
 @dataclass(frozen=True)
@@ -155,7 +187,7 @@ def list_professionals(session: Session) -> list[ProfessionalInfo]:
 def explain_can_perform(
     session: Session, professional_slug: str, service_code: str
 ) -> tuple[bool, str]:
-    """Return (ok, reason) for whether this professional may perform the service."""
+    """Return (ok, patient-facing reason) for whether this pro may do the service."""
     professional = _load_professional(session, professional_slug)
     service = _load_service(session, service_code)
     if _can_perform(professional, service):
@@ -168,8 +200,41 @@ def explain_can_perform(
     return (
         False,
         f"{professional.name} is a {level} and cannot perform service "
-        f"{service.code} (seniors only). Offer a senior doctor or a different service.",
+        f"{service.code} (seniors only).",
     )
+
+
+def seniors_for_service(session: Session, service_code: str) -> list[ProfessionalInfo]:
+    """Return seniors who may perform that service (empty if none)."""
+    service = _load_service(session, service_code)
+    return [
+        row
+        for row in list_professionals(session)
+        if row.is_senior and _can_perform(_load_professional(session, row.slug), service)
+    ]
+
+
+def snap_to_nearest_start(
+    session: Session,
+    professional_slug: str,
+    service_code: str,
+    day: date,
+    requested: datetime,
+    *,
+    ignore_booking_id: int | None = None,
+) -> datetime | None:
+    """Return the free 15-minute start on that day closest to requested, or None."""
+    free = list_available_starts(
+        session,
+        professional_slug,
+        service_code,
+        day,
+        ignore_booking_id=ignore_booking_id,
+    )
+    if not free:
+        return None
+    req = to_clinic(requested)
+    return min(free, key=lambda s: abs((to_clinic(s) - req).total_seconds()))
 
 
 def get_service_duration(session: Session, service_code: str) -> int:
@@ -187,9 +252,10 @@ def list_available_starts(
 ) -> list[datetime]:
     """Return blank start times for that pro, service, and day.
 
-    Use this in chat before book_appointment (new book or reschedule).
-    Pass ignore_booking_id while rescheduling so the current appointment does
-    not block other starts that only conflict with that row.
+    Starts already in the past (clinic now) are omitted. Use this in chat
+    before book_appointment (new book or reschedule). Pass ignore_booking_id
+    while rescheduling so the current appointment does not block other starts
+    that only conflict with that row.
     """
     professional = _load_professional(session, professional_slug)
     service = _load_service(session, service_code)
@@ -198,8 +264,11 @@ def list_available_starts(
     busy = _active_intervals(
         session, professional.id, day, ignore_booking_id=ignore_booking_id
     )
+    now = _clinic_now()
     starts: list[datetime] = []
     for start in candidate_starts(day):
+        if to_clinic(start) <= now:
+            continue
         try:
             _check_slot(professional, service, start, busy=busy)
         except BookingError:
@@ -253,6 +322,72 @@ def list_next_available_starts(
     return found
 
 
+def summarize_day_availability(
+    session: Session,
+    professional_slug: str,
+    service_code: str,
+    day: date,
+    *,
+    time_band: str | None = None,
+    sample_per_band: int = 4,
+    ignore_booking_id: int | None = None,
+) -> DayAvailabilitySummary:
+    """Return Plan B availability: weekday + per-band start windows and samples.
+
+    Windows are inclusive HH:MM ranges of legal 15-minute starts for this
+    service duration (not busy exceptions). Empty band means nothing to offer.
+    """
+    if sample_per_band < 1:
+        raise BookingError("sample_per_band must be at least 1")
+    service = _load_service(session, service_code)
+    _load_professional(session, professional_slug)
+    starts = list_available_starts(
+        session,
+        professional_slug,
+        service_code,
+        day,
+        ignore_booking_id=ignore_booking_id,
+    )
+    bands = _band_availability_map(starts, sample_per_band=sample_per_band)
+    if time_band in {"morning", "afternoon", "evening"}:
+        bands = {
+            name: (
+                bands[name]
+                if name == time_band
+                else BandAvailability(start_windows=(), sample_starts=())
+            )
+            for name in ("morning", "afternoon", "evening")
+        }
+    return DayAvailabilitySummary(
+        day=day,
+        weekday=day.strftime("%A"),
+        professional_slug=professional_slug,
+        service_code=service_code,
+        duration_minutes=service.duration_minutes,
+        grid_minutes=SLOT_MINUTES,
+        bands=bands,
+    )
+
+
+def day_availability_dict(summary: DayAvailabilitySummary) -> dict[str, object]:
+    """JSON-friendly Plan B shape for chat facts / replies."""
+    return {
+        "day": summary.day.isoformat(),
+        "weekday": summary.weekday,
+        "professional_slug": summary.professional_slug,
+        "service_code": summary.service_code,
+        "duration_minutes": summary.duration_minutes,
+        "grid_minutes": summary.grid_minutes,
+        "bands": {
+            name: {
+                "start_windows": [list(w) for w in band.start_windows],
+                "sample_starts": list(band.sample_starts),
+            }
+            for name, band in summary.bands.items()
+        },
+    }
+
+
 def list_busy_blocks(
     session: Session, professional_slug: str, day: date
 ) -> list[BusyBlock]:
@@ -304,7 +439,7 @@ def busy_block_public_dict(block: BusyBlock) -> dict[str, str]:
 def list_patient_appointments(
     session: Session, patient_email: str
 ) -> list[PatientAppointment]:
-    """Return this patient's active bookings so the agent can remind them."""
+    """Return this patient's upcoming (not-yet-finished) bookings for reminders."""
     email = _require_email(patient_email)
     rows = _active_patient_bookings(session, email)
     return [
@@ -485,7 +620,7 @@ def _enforce_patient_booking_rules(
     ends_at: datetime,
     ignore_booking_id: int | None = None,
 ) -> None:
-    """Reject rebooks / same-service doubles / a third active booking."""
+    """Reject rebooks / same-service doubles / a third upcoming booking."""
     existing = _active_patient_bookings(
         session, patient_email, ignore_booking_id=ignore_booking_id
     )
@@ -493,31 +628,34 @@ def _enforce_patient_booking_rules(
         if row.starts_at == starts_at:
             raise BookingError(
                 f"You already have booking #{row.id} at that same time "
-                f"(service {row.service.code}, {row.starts_at.isoformat()}). "
-                "Log in to manage it, or pick a different time."
+                f"(service {row.service.code}, "
+                f"{format_patient_span(row.starts_at, row.ends_at)}). "
+                "Manage it on the website, or pick a different time."
             )
         if overlaps(starts_at, ends_at, row.starts_at, row.ends_at):
             raise BookingError(
                 f"That time overlaps your booking #{row.id} "
                 f"(service {row.service.code}, "
-                f"{row.starts_at.isoformat()}–{row.ends_at.isoformat()}). "
-                "Pick another time, or log in to reschedule."
+                f"{format_patient_span(row.starts_at, row.ends_at)}). "
+                "Pick another time, or reschedule on the website."
             )
         if row.service_id == service_id:
             raise BookingError(
-                f"This email already has an active service {service_code} booking "
-                f"(#{row.id} on {row.starts_at.isoformat()}). "
-                "Log in to reschedule or cancel it, or use a different email. "
+                f"This email already has an upcoming service {service_code} booking "
+                f"(#{row.id} on {format_patient_span(row.starts_at, row.ends_at)}). "
+                "Cancel or reschedule it on the website, or use a different email. "
                 "I did not create a new booking."
             )
     if len(existing) >= MAX_ACTIVE_BOOKINGS_PER_PATIENT:
         summary = ", ".join(
-            f"{row.service.code} at {row.starts_at.isoformat()} (#{row.id})"
+            f"{row.service.code} on "
+            f"{format_patient_day(to_clinic(row.starts_at).date())} "
+            f"at {format_patient_clock(row.starts_at)} (#{row.id})"
             for row in existing
         )
         raise BookingError(
-            f"This email already has {len(existing)} active bookings ({summary}). "
-            "The limit is two. Log in to reschedule or cancel one, "
+            f"This email already has {len(existing)} upcoming bookings ({summary}). "
+            "The limit is two. Cancel or reschedule one on the website, "
             "or use a different email. I did not create a new booking."
         )
 
@@ -528,12 +666,14 @@ def _active_patient_bookings(
     *,
     ignore_booking_id: int | None = None,
 ) -> list[Booking]:
-    """Load this patient's active bookings, optionally skipping one id."""
+    """Load this patient's not-yet-finished confirmed/pending bookings."""
+    now = _clinic_now()
     stmt = (
         select(Booking)
         .where(
             Booking.patient_email == patient_email,
             Booking.status.in_(ACTIVE_STATUSES),
+            Booking.ends_at > now,
         )
         .order_by(Booking.starts_at)
     )
@@ -561,6 +701,8 @@ def _check_slot(
             "start must be Monday–Friday 09:00–20:00 on a 15-minute grid "
             "and not during a break"
         )
+    if to_clinic(start) <= _clinic_now():
+        raise BookingError("that start is already in the past; pick a later time")
     end = start + timedelta(minutes=service.duration_minutes)
     status = _status_for(service.code, start, end)
     if any(overlaps(start, end, b_start, b_end) for b_start, b_end in busy):
@@ -691,6 +833,55 @@ def _can_perform(professional: Professional, service: Service) -> bool:
     if service.seniors_only and not professional.is_senior:
         return False
     return True
+
+
+def _band_availability_map(
+    starts: list[datetime], *, sample_per_band: int
+) -> dict[str, BandAvailability]:
+    """Split legal starts into morning/afternoon/evening windows + samples."""
+    buckets: dict[str, list[datetime]] = {
+        "morning": [],
+        "afternoon": [],
+        "evening": [],
+    }
+    for start in starts:
+        local = to_clinic(start)
+        hour = local.hour
+        if hour < 12:
+            buckets["morning"].append(start)
+        elif hour < 17:
+            buckets["afternoon"].append(start)
+        else:
+            buckets["evening"].append(start)
+    return {
+        name: BandAvailability(
+            start_windows=tuple(_compress_start_windows(group)),
+            sample_starts=tuple(
+                to_clinic(s).strftime("%H:%M") for s in group[:sample_per_band]
+            ),
+        )
+        for name, group in buckets.items()
+    }
+
+
+def _compress_start_windows(starts: list[datetime]) -> list[tuple[str, str]]:
+    """Run-length encode consecutive 15-minute starts as inclusive HH:MM windows."""
+    if not starts:
+        return []
+    ordered = sorted(to_clinic(s) for s in starts)
+    windows: list[tuple[str, str]] = []
+    run_start = ordered[0]
+    prev = ordered[0]
+    step = timedelta(minutes=SLOT_MINUTES)
+    for current in ordered[1:]:
+        if current - prev == step:
+            prev = current
+            continue
+        windows.append((run_start.strftime("%H:%M"), prev.strftime("%H:%M")))
+        run_start = current
+        prev = current
+    windows.append((run_start.strftime("%H:%M"), prev.strftime("%H:%M")))
+    return windows
 
 
 def _active_intervals(

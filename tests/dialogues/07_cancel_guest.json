@@ -1,0 +1,13 @@
+{
+  "id": "cancel_guest_needs_login",
+  "description": "Guest cancel asks to log in (smoke step 8).",
+  "turns": [
+    {
+      "user": "Please cancel my appointment",
+      "expect": {
+        "in_scope": true,
+        "reply_contains": ["log in"]
+      }
+    }
+  ]
+}

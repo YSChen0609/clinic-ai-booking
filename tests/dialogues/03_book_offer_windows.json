@@ -1,0 +1,19 @@
+{
+  "id": "book_a_chen_tomorrow_morning",
+  "description": "Service A + Dr Chen + tomorrow morning offers real windows (smoke step 3).",
+  "turns": [
+    {
+      "user": "Book service A with Dr. Chen tomorrow morning",
+      "expect": {
+        "in_scope": true,
+        "status_in": ["offer_slots"],
+        "has_availability": true,
+        "has_offered_starts": true,
+        "draft": {
+          "service_code": "A",
+          "professional_slug": "junior"
+        }
+      }
+    }
+  ]
+}

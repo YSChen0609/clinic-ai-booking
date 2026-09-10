@@ -14,6 +14,9 @@
     ? Array.from(faqChips.querySelectorAll("[data-faq-token]"))
     : [];
   const TAB_CHAT_KEY = "clinic_chat_tab";
+  const CHAT_OPEN_KEY = "clinic_chat_open";
+  const GREETING_TEXT =
+    "Hello. I can help with clinic services, availability, and booking. How can I help?";
 
   const ICON_MIC =
     '<svg class="chat-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z" fill="currentColor"/></svg>';
@@ -40,6 +43,11 @@
   function setOpen(open) {
     panel.hidden = !open;
     toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    try {
+      sessionStorage.setItem(CHAT_OPEN_KEY, open ? "1" : "0");
+    } catch {
+      // Ignore quota / private-mode failures.
+    }
     if (open) {
       input.focus();
       loadHistory();
@@ -138,11 +146,31 @@
     return body;
   }
 
+  function ensureGreeting() {
+    let greeting = messages.querySelector(".chat-bubble.greeting");
+    if (!greeting) {
+      greeting = document.createElement("div");
+      greeting.className = "chat-bubble bot greeting";
+      greeting.dataset.greeting = "1";
+      const body = document.createElement("span");
+      body.className = "chat-bubble-text";
+      body.textContent = GREETING_TEXT;
+      greeting.appendChild(body);
+      greeting.appendChild(makeSpeakButton());
+    }
+    if (messages.firstElementChild !== greeting) {
+      messages.insertBefore(greeting, messages.firstChild);
+    }
+  }
+
   function clearBubbles() {
     stopPlayback();
-    Array.from(messages.querySelectorAll(".chat-bubble")).forEach((node) => {
-      node.remove();
-    });
+    Array.from(messages.querySelectorAll(".chat-bubble:not(.greeting)")).forEach(
+      (node) => {
+        node.remove();
+      }
+    );
+    ensureGreeting();
   }
 
   function setBusy(next) {
@@ -554,16 +582,135 @@
     await sendChat(text);
   });
 
+  // Soft in-site navigation: swap main/header HTML without unloading the chat
+  // shell, so an open panel and in-flight "Thinking…" keep running.
+  let softNavBusy = false;
+
+  function isSoftNavUrl(url) {
+    if (url.origin !== window.location.origin) {
+      return false;
+    }
+    if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/auth/")) {
+      return false;
+    }
+    if (url.pathname.startsWith("/static/")) {
+      return false;
+    }
+    return true;
+  }
+
+  async function softNavigate(href, options) {
+    const opts = options || {};
+    if (softNavBusy) {
+      return;
+    }
+    const target = new URL(href, window.location.href);
+    if (!isSoftNavUrl(target)) {
+      window.location.href = target.href;
+      return;
+    }
+    softNavBusy = true;
+    try {
+      const response = await fetch(target.href, {
+        method: "GET",
+        credentials: "same-origin",
+        headers: { Accept: "text/html" },
+      });
+      if (!response.ok) {
+        window.location.href = target.href;
+        return;
+      }
+      const html = await response.text();
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const nextMain = doc.querySelector("main.page");
+      const nextHeader = doc.querySelector("header.site-header");
+      const nextFooter = doc.querySelector("footer.site-footer");
+      const curMain = document.querySelector("main.page");
+      const curHeader = document.querySelector("header.site-header");
+      const curFooter = document.querySelector("footer.site-footer");
+      if (!nextMain || !curMain) {
+        window.location.href = target.href;
+        return;
+      }
+      curMain.replaceWith(nextMain);
+      if (nextHeader && curHeader) {
+        curHeader.replaceWith(nextHeader);
+      }
+      if (nextFooter && curFooter) {
+        curFooter.replaceWith(nextFooter);
+      }
+      const nextTitle = doc.querySelector("title");
+      if (nextTitle) {
+        document.title = nextTitle.textContent || document.title;
+      }
+      if (!opts.replace) {
+        history.pushState({ softNav: true }, "", target.href);
+      }
+      window.scrollTo(0, 0);
+    } catch (err) {
+      console.error("soft navigate failed", err);
+      window.location.href = target.href;
+    } finally {
+      softNavBusy = false;
+    }
+  }
+
+  document.addEventListener("click", (event) => {
+    if (event.defaultPrevented || event.button !== 0) {
+      return;
+    }
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return;
+    }
+    const anchor = event.target && event.target.closest
+      ? event.target.closest("a[href]")
+      : null;
+    if (!anchor || anchor.target === "_blank" || anchor.hasAttribute("download")) {
+      return;
+    }
+    let url;
+    try {
+      url = new URL(anchor.href, window.location.href);
+    } catch {
+      return;
+    }
+    if (!isSoftNavUrl(url)) {
+      return;
+    }
+    if (url.href === window.location.href) {
+      event.preventDefault();
+      return;
+    }
+    event.preventDefault();
+    softNavigate(url.href);
+  });
+
+  window.addEventListener("popstate", () => {
+    softNavigate(window.location.href, { replace: true });
+  });
+
   // sessionStorage lasts for this tab only (survives in-tab navigation / refresh;
   // cleared when the tab is closed). Cookie session alone would leak across tabs.
   async function bootstrapChat() {
     const sameTab = sessionStorage.getItem(TAB_CHAT_KEY) === "1";
+    let wasOpen = false;
+    try {
+      wasOpen = sessionStorage.getItem(CHAT_OPEN_KEY) === "1";
+    } catch {
+      wasOpen = false;
+    }
     if (!sameTab) {
       sessionStorage.setItem(TAB_CHAT_KEY, "1");
       await resetChat();
+      if (wasOpen) {
+        setOpen(true);
+      }
       return;
     }
     await loadHistory();
+    if (wasOpen) {
+      setOpen(true);
+    }
   }
 
   bootstrapChat();

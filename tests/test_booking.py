@@ -32,6 +32,15 @@ SATURDAY = date(2026, 8, 29)
 PATIENT = {"patient_name": "Pat Lee", "patient_email": "pat@example.com"}
 
 
+@pytest.fixture(autouse=True)
+def _freeze_clinic_now_on_monday_morning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep MONDAY fixture bookings 'upcoming' relative to clinic clock."""
+    monkeypatch.setattr(
+        "clinic_ai_booking.domain.booking._clinic_now",
+        lambda: clinic_datetime(MONDAY, time(8, 0)),
+    )
+
+
 def _book(
     session: Session,
     *,
@@ -62,6 +71,16 @@ def test_seed_creates_three_professionals_and_services_a_to_e(db_session: Sessio
     assert durations == {"A": 60, "B": 60, "C": 150, "D": 120, "E": 360}
 
 
+def test_summarize_day_availability_has_weekday_and_windows(db_session: Session) -> None:
+    from clinic_ai_booking.domain.booking import summarize_day_availability
+
+    summary = summarize_day_availability(db_session, "junior", "A", MONDAY)
+    assert summary.weekday == "Monday"
+    assert summary.grid_minutes == 15
+    assert summary.bands["morning"].start_windows
+    assert len(summary.bands["morning"].sample_starts) <= 4
+
+
 def test_books_within_hours_when_slot_is_free(db_session: Session) -> None:
     booking = _book(db_session)
     assert booking.status == STATUS_CONFIRMED
@@ -70,6 +89,33 @@ def test_books_within_hours_when_slot_is_free(db_session: Session) -> None:
     assert clinic_datetime(MONDAY, time(9, 0)) not in starts
     assert clinic_datetime(MONDAY, time(10, 0)) in starts
     assert clinic_datetime(MONDAY, time(11, 0)) in starts
+
+
+def test_list_available_starts_skips_past_times(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "clinic_ai_booking.domain.booking._clinic_now",
+        lambda: clinic_datetime(MONDAY, time(16, 12)),
+    )
+    starts = list_available_starts(db_session, "junior", "A", MONDAY)
+    assert clinic_datetime(MONDAY, time(9, 0)) not in starts
+    assert clinic_datetime(MONDAY, time(14, 0)) not in starts
+    assert clinic_datetime(MONDAY, time(14, 15)) not in starts
+    assert all(s > clinic_datetime(MONDAY, time(16, 12)) for s in starts)
+    # 60-min A cannot start at 16:15 (hits dinner); evening 18:00 is free.
+    assert clinic_datetime(MONDAY, time(18, 0)) in starts
+
+
+def test_rejects_booking_a_past_start(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "clinic_ai_booking.domain.booking._clinic_now",
+        lambda: clinic_datetime(MONDAY, time(16, 12)),
+    )
+    with pytest.raises(BookingError, match="already in the past"):
+        _book(db_session, clock=time(9, 0))
 
 
 def test_rejects_conflict_when_slots_overlap(db_session: Session) -> None:
@@ -460,7 +506,7 @@ def test_rejects_second_booking_of_same_service_suggests_reschedule(
     db_session: Session,
 ) -> None:
     existing = _book(db_session, service="A", clock=time(9, 0))
-    with pytest.raises(BookingError, match="already has an active service"):
+    with pytest.raises(BookingError, match="already has an upcoming service"):
         _book(db_session, service="A", clock=time(14, 0))
     assert existing.status == STATUS_CONFIRMED
     assert len(list_patient_appointments(db_session, PATIENT["patient_email"])) == 1
@@ -488,6 +534,44 @@ def test_rejects_third_active_booking(db_session: Session) -> None:
             starts_at=clinic_datetime(MONDAY, time(10, 0)),
             **PATIENT,
         )
+
+
+def test_finished_bookings_do_not_count_toward_cap(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _book(db_session, service="A", clock=time(9, 0))
+    _book(db_session, service="B", clock=time(11, 0))
+    # After both Monday slots have ended, they no longer count.
+    monkeypatch.setattr(
+        "clinic_ai_booking.domain.booking._clinic_now",
+        lambda: clinic_datetime(MONDAY, time(16, 0)),
+    )
+    assert list_patient_appointments(db_session, PATIENT["patient_email"]) == []
+    tuesday = date(2026, 9, 1)
+    third = book_appointment(
+        db_session,
+        professional_slug="senior-1",
+        service_code="C",
+        starts_at=clinic_datetime(tuesday, time(9, 0)),
+        **PATIENT,
+    )
+    assert third.status == STATUS_CONFIRMED
+    rows = list_patient_appointments(db_session, PATIENT["patient_email"])
+    assert len(rows) == 1
+    assert rows[0].service_code == "C"
+
+
+def test_finished_same_service_allows_rebook(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _book(db_session, service="A", clock=time(9, 0))
+    monkeypatch.setattr(
+        "clinic_ai_booking.domain.booking._clinic_now",
+        lambda: clinic_datetime(MONDAY, time(10, 1)),
+    )
+    again = _book(db_session, service="A", clock=time(14, 0))
+    assert again.service.code == "A"
+    assert len(list_patient_appointments(db_session, PATIENT["patient_email"])) == 1
 
 
 def test_rejects_second_booking_that_overlaps_patient_time(

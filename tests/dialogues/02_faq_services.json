@@ -1,0 +1,13 @@
+{
+  "id": "faq_services_chip",
+  "description": "FAQ chip lists services without inventing slots (smoke step 2).",
+  "turns": [
+    {
+      "user": "FAQ_SERVICES",
+      "expect": {
+        "in_scope": true,
+        "reply_contains": ["Service"]
+      }
+    }
+  ]
+}

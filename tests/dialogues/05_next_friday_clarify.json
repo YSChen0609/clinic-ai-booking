@@ -1,0 +1,14 @@
+{
+  "id": "next_friday_clarify",
+  "description": "Ambiguous next Friday asks which of two dates (smoke step 5).",
+  "turns": [
+    {
+      "user": "Book service A with Dr. Chen next Friday morning",
+      "expect": {
+        "in_scope": true,
+        "status_in": ["need_clarify_day"],
+        "day_options_len": 2
+      }
+    }
+  ]
+}

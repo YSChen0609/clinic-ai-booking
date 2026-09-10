@@ -16,6 +16,16 @@ Security note: **no-password login (name + email only) is MVP-only.** Do not use
 2. Header shows **Signed in as \<name\>**.
 3. Reload the page or open another doctor page — still signed in (cookie `clinic_session`).
 
+## Chat stays open across in-site navigation
+
+1. Open the chat panel and send a message (or leave it open empty).
+2. While chat is open (even mid “Thinking…”), click Intro / a doctor tab in the **same** browser tab.
+3. The page body should change, but the chat panel stays open and any in-flight reply should finish (soft navigation; chat shell is not unloaded).
+4. Hard refresh: panel re-opens from `sessionStorage` if it was open.
+5. Opening a **new** browser tab still resets the chat transcript (login kept).
+
+Note: Compose builds the app image with static files inside — rebuild/restart the `app` service after JS changes (`docker compose up --build -d app`), then hard-refresh the browser (`?v=` cache buster).
+
 ## Log out
 
 1. Click **Log out**.
@@ -53,15 +63,29 @@ Chat (after Ollama model is pulled): as a visitor, ask to reschedule or cancel �
 Flow: FAQ/scope extract → in-scope booking StateGraph over `domain/booking.py` → client reply.
 Multi-turn: sticky `booking_draft` + identity on the session cookie; graph stops when the user must answer.
 
+### Live LLM regression (preferred over re-walking the whole checklist)
+
+Default `uv run pytest` skips these. With Postgres + Ollama up:
+
+```bash
+uv run pytest -m llm
+```
+
+Scripts live in `tests/dialogues/` (plus one adaptive checkout test). They assert **end state** (`facts.status`, draft fields, booking id) — not reply prose.
+
+**Bug → test → fix:** when messenger smoke fails, add/adjust a dialogue that reproduces it and confirm it fails, then fix the agent. Do not “prompt fix” without a locked case.
+
 Suggested smoke path (messenger or `POST /api/chat`):
 
 1. Out of scope (“what’s the weather?”) → polite clinic-only reply.
 2. FAQ chip or “what services do you offer?” → catalog from DB.
-3. “Book service A with Dr. Chen tomorrow morning” → offers real starts only (no invented times).
-4. Pick a listed time → ask name+email once per chat thread (kept for later bookings in the same chat).
-5. Booking succeeds → draft clears but **thread memory** keeps last doctor/day; contact stays until Reset chat.
-6. Follow-ups like “also … with him in the afternoon” reuse that memory; “I’ve told you” works because contact was kept.
-7. Cancel/reschedule in chat → login / not-in-flow message (book-only stage).
+3. “Book service A with Dr. Chen tomorrow morning” → offers **windows** for that day (short ranges; no invented times).
+3b. Service + doctor **without a day** → **later today** windows first, then “or tomorrow / another day?”; if today is full, next open day the same way. A bare clock soft-locks that day.
+4. Pick a listed time, or a rough clock (e.g. 9:20) → snap + confirm if rounded → then ask name+email once per chat thread.
+5. “Next Friday …” → bot asks which of two concrete Fridays (reply 1/2 or the date).
+6. Booking succeeds → draft clears but **thread memory** keeps last doctor/day; contact stays until Reset chat.
+7. Follow-ups like “also service B with him on the same day” reuse that memory; junior + service C lists seniors and offers another service.
+8. Cancel/reschedule in chat → login required if guest; if logged in, “use the website” (book-only stage).
 
 Use **Reset chat** (or `/api/chat/reset`) to clear transcript, draft, contact, and thread memory.
 
@@ -130,7 +154,7 @@ If mic permission is denied or `VOICE_ENABLED=false`, typing + Send must still w
 
 Requires secrets in `.env` (from `.env.example`). Do **not** commit `.env`.
 
-**How to get client id / secret / refresh token:** see [oauth-setup.md](oauth-setup.md) (also summarized in [external.md](external.md)).
+**How to get client id / secret / refresh token:** see [oauth-setup.md](oauth-setup.md) (also summarized in [../external.md](../external.md)).
 
 1. Follow [oauth-setup.md](oauth-setup.md); set `NOTIFY_MODE=real`.
 2. Recreate the app so env is picked up:

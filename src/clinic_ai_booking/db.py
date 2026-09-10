@@ -112,7 +112,11 @@ def host_postgres_url(*, database: str | None = None) -> str:
 
 def make_engine(url: str) -> Engine:
     """Build a SQLAlchemy engine for that Postgres URL."""
-    return create_engine(normalize_database_url(url), pool_pre_ping=True)
+    return create_engine(
+        normalize_database_url(url),
+        pool_pre_ping=True,
+        connect_args={"connect_timeout": 5},
+    )
 
 
 def ensure_database(url: str) -> None:
@@ -123,7 +127,11 @@ def ensure_database(url: str) -> None:
         raise ValueError("database name is missing or invalid")
     last_error: Exception | None = None
     for admin_name in ("postgres", "clinic"):
-        admin = create_engine(sa_url.set(database=admin_name), isolation_level="AUTOCOMMIT")
+        admin = create_engine(
+            sa_url.set(database=admin_name),
+            isolation_level="AUTOCOMMIT",
+            connect_args={"connect_timeout": 5},
+        )
         try:
             with admin.connect() as conn:
                 exists = conn.execute(

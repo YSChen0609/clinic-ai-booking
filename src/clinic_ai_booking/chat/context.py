@@ -9,6 +9,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from clinic_ai_booking.chat.aliases import SERVICE_CODES
+from clinic_ai_booking.domain.booking import list_professionals
 from clinic_ai_booking.domain.hours import TIMEZONE
 from clinic_ai_booking.domain.models import User
 
@@ -36,10 +38,20 @@ class BookingDraft:
 
     service_code: str | None = None
     professional_slug: str | None = None
+    # Must be True before the book graph treats the doctor as locked.
+    professional_confirmed: bool = False
+    # Ranked slug proposals awaiting "yes" / pick (e.g. both seniors).
+    professional_candidates: list[str] = field(default_factory=list)
     day: str | None = None
     starts_at: str | None = None
     # morning | afternoon | evening — prefer over inventing a clock time
     time_band: str | None = None
+    # Two ISO dates when "next Friday" needs this-week vs next-week clarify.
+    day_clarify_options: list[str] = field(default_factory=list)
+    # True after user typed an exact grid time or confirmed a snap.
+    starts_at_confirmed: bool = False
+    # True after checkout confirmation ("yes") before book_appointment.
+    book_confirmed: bool = False
 
     def to_session(self) -> dict[str, Any]:
         """Serialize for Starlette session storage."""
@@ -53,12 +65,35 @@ class BookingDraft:
         band = raw.get("time_band")
         if band not in {"morning", "afternoon", "evening"}:
             band = None
+        cands = raw.get("professional_candidates") or []
+        if not isinstance(cands, list):
+            cands = []
+        clarify = raw.get("day_clarify_options") or []
+        if not isinstance(clarify, list):
+            clarify = []
+        code = raw.get("service_code")
+        if isinstance(code, str):
+            code = code.strip().upper()
+            if code not in SERVICE_CODES:
+                code = None
+        else:
+            code = None
+        slug = raw.get("professional_slug")
+        if not isinstance(slug, str) or not slug.strip():
+            slug = None
+        else:
+            slug = slug.strip()
         return cls(
-            service_code=raw.get("service_code"),
-            professional_slug=raw.get("professional_slug"),
+            service_code=code,
+            professional_slug=slug,
+            professional_confirmed=bool(raw.get("professional_confirmed")),
+            professional_candidates=[str(c) for c in cands if c],
             day=raw.get("day"),
             starts_at=raw.get("starts_at"),
             time_band=band,
+            day_clarify_options=[str(d) for d in clarify if d],
+            starts_at_confirmed=bool(raw.get("starts_at_confirmed")),
+            book_confirmed=bool(raw.get("book_confirmed")),
         )
 
 
@@ -154,7 +189,7 @@ def load_context(
     memory = ChatMemory.from_session(session.get(SESSION_CHAT_MEMORY_KEY))
     draft = BookingDraft.from_session(session.get(SESSION_BOOKING_DRAFT_KEY))
     if user is not None:
-        return ChatContext(
+        ctx = ChatContext(
             db=db,
             user_id=user.id,
             patient_name=user.name,
@@ -163,21 +198,51 @@ def load_context(
             draft=draft,
             memory=memory,
         )
-    name, email = _load_chat_contact(session)
-    return ChatContext(
-        db=db,
-        user_id=None,
-        patient_name=name,
-        patient_email=email,
-        contact_confirmed=bool(name and email),
-        draft=draft,
-        memory=memory,
-    )
+    else:
+        name, email = _load_chat_contact(session)
+        ctx = ChatContext(
+            db=db,
+            user_id=None,
+            patient_name=name,
+            patient_email=email,
+            contact_confirmed=bool(name and email),
+            draft=draft,
+            memory=memory,
+        )
+    clamp_draft_to_catalog(ctx)
+    return ctx
+
+
+def clamp_draft_to_catalog(ctx: ChatContext) -> None:
+    """Keep draft service/doctor fields on the closed catalog selects only."""
+    code = ctx.draft.service_code
+    if code is not None:
+        cleaned = str(code).strip().upper()
+        ctx.draft.service_code = cleaned if cleaned in SERVICE_CODES else None
+
+    slugs = {row.slug for row in list_professionals(ctx.db)}
+    slug = ctx.draft.professional_slug
+    if slug is not None and slug not in slugs:
+        ctx.draft.professional_slug = None
+        ctx.draft.professional_confirmed = False
+    ctx.draft.professional_candidates = [
+        c for c in ctx.draft.professional_candidates if c in slugs
+    ]
+    if (
+        ctx.draft.professional_slug
+        and ctx.draft.professional_candidates
+        and ctx.draft.professional_slug not in ctx.draft.professional_candidates
+        and len(ctx.draft.professional_candidates) > 1
+    ):
+        # Stale suggestion outside the open candidate list.
+        ctx.draft.professional_slug = None
+        ctx.draft.professional_confirmed = False
 
 
 def save_context(session: MutableMapping[str, Any], ctx: ChatContext) -> None:
     """Persist draft, thread memory, and chat contact; purge legacy sticky keys."""
     purge_legacy_visitor_contact(session)
+    clamp_draft_to_catalog(ctx)
     session[SESSION_BOOKING_DRAFT_KEY] = ctx.draft.to_session()
     session[SESSION_CHAT_MEMORY_KEY] = ctx.memory.to_session()
     if ctx.is_authenticated:

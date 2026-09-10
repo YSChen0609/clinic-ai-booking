@@ -1,0 +1,13 @@
+{
+  "id": "out_of_scope_weather",
+  "description": "Weather is out of clinic scope (smoke step 1).",
+  "turns": [
+    {
+      "user": "What's the weather in Taipei tomorrow?",
+      "expect": {
+        "in_scope": false,
+        "reply_contains": ["clinic"]
+      }
+    }
+  ]
+}

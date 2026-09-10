@@ -6,7 +6,7 @@ Images travel; **drivers and Docker GPU plumbing do not**. Base Compose = CPU. G
 
 Sources: [Compose GPU](https://docs.docker.com/compose/how-tos/gpu-support/), [Docker Desktop GPU (Windows/WSL2)](https://docs.docker.com/desktop/features/gpu/), [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/index.html), [CUDA on WSL](https://docs.nvidia.com/cuda/wsl-user-guide/index.html).
 
-Product install: [external.md](external.md). Architecture: [internal.md](internal.md).
+Product install: [../external.md](../external.md). Architecture: [../internal.md](../internal.md).
 
 ---
 

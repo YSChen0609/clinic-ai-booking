@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
@@ -13,10 +14,16 @@ from clinic_ai_booking.domain.booking import (
     book_appointment as engine_book,
     booking_created_dict,
     check_start as engine_check_start,
+    day_availability_dict,
     explain_can_perform,
+    get_service_duration,
     list_available_starts as engine_list_available_starts,
     list_next_available_starts as engine_list_next_available_starts,
     list_patient_appointments as engine_list_patient_appointments,
+    list_professionals,
+    seniors_for_service,
+    snap_to_nearest_start,
+    summarize_day_availability,
 )
 from clinic_ai_booking.chat.context import ChatContext
 from clinic_ai_booking.chat.facts import TurnFacts, empty_facts
@@ -25,15 +32,23 @@ from clinic_ai_booking.chat.resolve import (
     catalog_service_lines,
     filter_starts_by_band,
     format_day_label,
+    is_concrete_clock,
     parse_day,
     parse_starts_at,
 )
 from clinic_ai_booking.chat.state import TurnState
-from clinic_ai_booking.domain.hours import explain_clinic_day, to_clinic
+from clinic_ai_booking.domain.hours import (
+    explain_clinic_day,
+    format_patient_clock,
+    format_patient_span,
+    on_start_grid,
+    to_clinic,
+)
 
 logger = logging.getLogger(__name__)
 
 Route = Literal["reply", "available_time", "client_id", "book", "post_booking"]
+_MAX_OFFER_SAMPLES = 3
 
 
 def doctor_service(state: TurnState, runtime: Runtime[ChatContext]) -> dict[str, Any]:
@@ -42,17 +57,85 @@ def doctor_service(state: TurnState, runtime: Runtime[ChatContext]) -> dict[str,
     facts = empty_facts()
     facts["clinic_today"] = format_day_label(ctx.clinic_day())
     facts["catalog_services"] = catalog_service_lines(ctx.db)
-    facts["catalog_professionals"] = catalog_professional_lines(ctx.db)
+    facts["catalog_professionals"] = catalog_professional_lines(
+        ctx.db, service_code=ctx.draft.service_code
+    )
     if ctx.draft.day:
         facts["resolved_day"] = format_day_label(parse_day(ctx.draft.day) or ctx.clinic_day())
     if ctx.draft.time_band:
         facts["time_band"] = ctx.draft.time_band
 
+    if ctx.draft.day_clarify_options and not ctx.draft.day:
+        opts = ctx.draft.day_clarify_options
+        facts["status"] = "need_clarify_day"
+        facts["day_options"] = list(opts)
+        facts["missing"] = ["day"]
+        labels = [format_day_label(parse_day(o) or ctx.clinic_day()) for o in opts]
+        facts["hint"] = (
+            "Ask which Friday (or weekday) they mean using day_options only."
+        )
+        facts["error"] = (
+            f"Did you mean {labels[0]} (this upcoming week) or "
+            f"{labels[1] if len(labels) > 1 else 'the following week'}? "
+            "Reply 1 or 2, or the date."
+        )
+        return {"facts": facts}
+
     missing: list[str] = []
     if not ctx.draft.service_code:
         missing.append("service_code")
+
+    # Ambiguous / unconfirmed candidates must be confirmed before times.
+    # Exact unique names are already locked in extract (confirmed=True).
+    if ctx.draft.professional_candidates and (
+        not ctx.draft.professional_confirmed or not ctx.draft.professional_slug
+    ):
+        facts["status"] = "need_confirm_doctor"
+        facts["doctor_candidates"] = _candidate_lines(ctx)
+        facts["missing"] = ["professional_confirm"]
+        suggested = None
+        if ctx.draft.professional_slug:
+            suggested = _professional_name(ctx, ctx.draft.professional_slug)
+        if suggested and not ctx.draft.professional_confirmed:
+            facts["hint"] = f"Confirm doctor {ctx.draft.professional_slug}."
+            facts["error"] = (
+                f"Did you mean {suggested}?\n\n"
+                "Or pick one of these:\n"
+                + "\n".join(facts["doctor_candidates"])
+                + "\n\nReply yes, a number, or a name — "
+                "or choose a different service (A–E)."
+            )
+        elif ctx.draft.professional_slug:
+            facts["hint"] = (
+                f"Confirm doctor {ctx.draft.professional_slug} "
+                "(or pick another from doctor_candidates)."
+            )
+        else:
+            facts["hint"] = (
+                "Doctor name is ambiguous. Ask which candidate from "
+                "doctor_candidates they want."
+            )
+            facts["error"] = (
+                "Please choose a doctor:\n"
+                + "\n".join(facts["doctor_candidates"])
+                + "\n\nReply with a number or name, "
+                "or choose a different service (A–E)."
+            )
+        return {"facts": facts}
+
     if not ctx.draft.professional_slug:
         missing.append("professional_slug")
+    elif not ctx.draft.professional_confirmed:
+        facts["status"] = "need_confirm_doctor"
+        facts["doctor_candidates"] = _candidate_lines(ctx) or [
+            ctx.draft.professional_slug
+        ]
+        facts["missing"] = ["professional_confirm"]
+        facts["hint"] = (
+            f"Confirm doctor {ctx.draft.professional_slug} before offering times."
+        )
+        return {"facts": facts}
+
     if missing:
         facts["status"] = "need_info"
         facts["missing"] = missing
@@ -66,10 +149,31 @@ def doctor_service(state: TurnState, runtime: Runtime[ChatContext]) -> dict[str,
         ctx.db, ctx.draft.professional_slug, ctx.draft.service_code
     )
     if not ok:
-        facts["status"] = "need_info"
-        facts["missing"] = ["professional_slug"]
-        facts["error"] = reason
-        facts["hint"] = reason
+        seniors = seniors_for_service(ctx.db, ctx.draft.service_code or "")
+        ctx.draft.professional_slug = None
+        ctx.draft.professional_confirmed = False
+        ctx.draft.professional_candidates = [row.slug for row in seniors]
+        if seniors:
+            facts["status"] = "need_confirm_doctor"
+            facts["doctor_candidates"] = _candidate_lines(ctx)
+            facts["missing"] = ["professional_confirm"]
+            facts["error"] = (
+                f"{reason}\n\n"
+                "Seniors who can do this service:\n"
+                + "\n".join(facts["doctor_candidates"])
+                + "\n\nReply with a number or name, "
+                "or choose a different service (A–E)."
+            )
+            facts["hint"] = facts["error"]
+        else:
+            facts["status"] = "need_info"
+            facts["missing"] = ["professional_slug", "service_code"]
+            facts["error"] = (
+                f"{reason}\n\n"
+                "No senior is available for that service — "
+                "please pick a different service."
+            )
+            facts["hint"] = facts["error"]
         return {"facts": facts}
 
     blocked = _same_service_block(ctx)
@@ -87,7 +191,9 @@ def available_time(state: TurnState, runtime: Runtime[ChatContext]) -> dict[str,
     facts = empty_facts()
     facts["clinic_today"] = format_day_label(ctx.clinic_day())
     facts["catalog_services"] = catalog_service_lines(ctx.db)
-    facts["catalog_professionals"] = catalog_professional_lines(ctx.db)
+    facts["catalog_professionals"] = catalog_professional_lines(
+        ctx.db, service_code=ctx.draft.service_code
+    )
     if ctx.draft.time_band:
         facts["time_band"] = ctx.draft.time_band
     slug = ctx.draft.professional_slug
@@ -96,45 +202,73 @@ def available_time(state: TurnState, runtime: Runtime[ChatContext]) -> dict[str,
 
     day = parse_day(ctx.draft.day)
     start = parse_starts_at(ctx.draft.starts_at, day=day)
+    # Bare clock without a day → prefer last booked day, else clinic today.
+    if (
+        start is None
+        and day is None
+        and is_concrete_clock(ctx.draft.starts_at)
+    ):
+        day = parse_day(ctx.memory.last_day) or ctx.clinic_day()
+        ctx.draft.day = day.isoformat()
+        start = parse_starts_at(ctx.draft.starts_at, day=day)
 
     if start is not None:
-        try:
-            plan = engine_check_start(
-                ctx.db,
-                professional_slug=slug,
-                service_code=code,
-                starts_at=start,
-            )
-            ctx.draft.day = to_clinic(plan.starts_at).date().isoformat()
-            ctx.draft.starts_at = plan.starts_at.isoformat()
-            facts["status"] = "slot_ok"
-            facts["resolved_day"] = format_day_label(to_clinic(plan.starts_at).date())
-            facts["hint"] = (
-                f"Slot is free: {plan.starts_at.isoformat()} "
-                f"(service {plan.service_code}, {plan.professional_slug})."
-            )
-            facts["offered_starts"] = [plan.starts_at.isoformat()]
-            facts["offered_times"] = [to_clinic(plan.starts_at).strftime("%H:%M")]
-            return {"facts": facts}
-        except BookingError as exc:
-            facts["error"] = str(exc)
-            day = to_clinic(start).date()
+        snapped = snap_to_nearest_start(ctx.db, slug, code, day or to_clinic(start).date(), start)
+        if snapped is None:
+            facts["error"] = "That time is not free; pick another start in the windows below."
+            day = day or to_clinic(start).date()
             ctx.draft.starts_at = None
+            ctx.draft.starts_at_confirmed = False
+        else:
+            local_req = to_clinic(start)
+            local_snap = to_clinic(snapped)
+            exact_grid = on_start_grid(start) and local_req.strftime("%H:%M") == local_snap.strftime(
+                "%H:%M"
+            )
+            ctx.draft.day = local_snap.date().isoformat()
+            ctx.draft.starts_at = snapped.isoformat()
+            if exact_grid or ctx.draft.starts_at_confirmed:
+                ctx.draft.starts_at_confirmed = True
+                try:
+                    plan = engine_check_start(
+                        ctx.db,
+                        professional_slug=slug,
+                        service_code=code,
+                        starts_at=snapped,
+                    )
+                    ctx.draft.day = to_clinic(plan.starts_at).date().isoformat()
+                    ctx.draft.starts_at = plan.starts_at.isoformat()
+                    facts["status"] = "slot_ok"
+                    facts["resolved_day"] = format_day_label(to_clinic(plan.starts_at).date())
+                    facts["hint"] = (
+                        f"Slot is free: {plan.starts_at.isoformat()} "
+                        f"(service {plan.service_code}, {plan.professional_slug})."
+                    )
+                    facts["offered_starts"] = [plan.starts_at.isoformat()]
+                    facts["offered_times"] = [to_clinic(plan.starts_at).strftime("%H:%M")]
+                    return {"facts": facts}
+                except BookingError as exc:
+                    facts["error"] = str(exc)
+                    day = to_clinic(snapped).date()
+                    ctx.draft.starts_at = None
+                    ctx.draft.starts_at_confirmed = False
+            else:
+                clock = local_snap.strftime("%H:%M")
+                facts["status"] = "need_confirm_slot"
+                facts["resolved_day"] = format_day_label(local_snap.date())
+                facts["offered_starts"] = [snapped.isoformat()]
+                facts["offered_times"] = [clock]
+                facts["missing"] = ["starts_at"]
+                facts["hint"] = f"Confirm snapped start {clock}."
+                facts["error"] = (
+                    f"We only start on 15-minute times. Closest free start is {clock} "
+                    f"(you said {local_req.strftime('%H:%M')}). Reply yes to use {clock}, "
+                    "or name another time in the free windows."
+                )
+                return {"facts": facts}
 
     if day is None:
-        try:
-            nxt = engine_list_next_available_starts(
-                ctx.db, slug, code, ctx.clinic_day(), limit_days=3, limit_starts_per_day=5
-            )
-        except BookingError as exc:
-            facts["status"] = "need_info"
-            facts["error"] = str(exc)
-            facts["hint"] = str(exc)
-            facts["missing"] = ["day"]
-            return {"facts": facts}
-        return _offer_days(
-            facts, nxt, hint="Ask which day/time they want from these options.", band=ctx.draft.time_band
-        )
+        return _offer_today_first(facts, ctx, slug, code, band=ctx.draft.time_band)
 
     facts["resolved_day"] = format_day_label(day)
     valid, reason = explain_clinic_day(day)
@@ -154,16 +288,19 @@ def available_time(state: TurnState, runtime: Runtime[ChatContext]) -> dict[str,
         all_day = engine_list_available_starts(ctx.db, slug, code, day)
         if all_day and ctx.draft.time_band:
             wanted = ctx.draft.time_band
+            summary = summarize_day_availability(ctx.db, slug, code, day, sample_per_band=2)
+            avail = day_availability_dict(summary)
+            samples = _samples_from_availability(avail, band=None)
             facts["status"] = "offer_slots"
-            facts["offered_starts"] = [s.isoformat() for s in all_day[:12]]
-            facts["offered_times"] = [to_clinic(s).strftime("%H:%M") for s in all_day[:12]]
+            facts["availability"] = avail
+            facts["offered_starts"] = samples["isos"]
+            facts["offered_times"] = samples["clocks"]
             facts["missing"] = ["starts_at"]
-            # Do not label these times as the empty band (e.g. "(morning)").
             facts["time_band"] = ""
             facts["error"] = f"No {wanted} starts on {format_day_label(day)}"
             facts["hint"] = (
                 f"{facts['error']}. "
-                "Show the other times from offered_times only, or ask another day."
+                "Show windows/samples from availability, or ask another day."
             )
             ctx.draft.day = day.isoformat()
             return {"facts": facts}
@@ -178,13 +315,25 @@ def available_time(state: TurnState, runtime: Runtime[ChatContext]) -> dict[str,
         )
 
     ctx.draft.day = day.isoformat()
+    summary = summarize_day_availability(
+        ctx.db,
+        slug,
+        code,
+        day,
+        time_band=ctx.draft.time_band,
+        sample_per_band=2,
+    )
+    avail = day_availability_dict(summary)
+    samples = _samples_from_availability(avail, band=ctx.draft.time_band)
     facts["status"] = "offer_slots"
-    facts["offered_starts"] = [s.isoformat() for s in starts[:12]]
-    facts["offered_times"] = [to_clinic(s).strftime("%H:%M") for s in starts[:12]]
+    facts["availability"] = avail
+    facts["offered_starts"] = samples["isos"]
+    facts["offered_times"] = samples["clocks"]
     band_note = f" ({ctx.draft.time_band})" if ctx.draft.time_band else ""
     facts["hint"] = (
-        f"Show only these starts for {format_day_label(day)}{band_note}. "
-        "Do not invent times. Ask the patient to pick one."
+        f"Offer start windows plus at most {_MAX_OFFER_SAMPLES} sample clocks for "
+        f"{format_day_label(day)}{band_note} ({summary.weekday}). "
+        "Say starts are on a 15-minute grid. Do not invent times."
     )
     facts["missing"] = ["starts_at"]
     return {"facts": facts}
@@ -216,7 +365,7 @@ def client_id(state: TurnState, runtime: Runtime[ChatContext]) -> dict[str, Any]
 
 
 def book_node(state: TurnState, runtime: Runtime[ChatContext]) -> dict[str, Any]:
-    """Write the appointment through booking.book_appointment."""
+    """Confirm with the patient, then write through booking.book_appointment."""
     ctx = runtime.context
     facts = empty_facts()
     slug = ctx.draft.professional_slug
@@ -227,6 +376,18 @@ def book_node(state: TurnState, runtime: Runtime[ChatContext]) -> dict[str, Any]
         facts["status"] = "book_failed"
         facts["error"] = "Missing service, doctor, start, or contact."
         facts["hint"] = facts["error"]
+        return {"facts": facts}
+
+    if not ctx.draft.book_confirmed:
+        _fill_appointment_summary(facts, ctx, slug=slug, code=code, start=start)
+        facts["status"] = "need_confirm_book"
+        facts["hint"] = (
+            f"Ask the patient to confirm booking service {code} with {slug} "
+            f"on {facts['resolved_day']} at {(facts.get('offered_times') or [''])[0]} "
+            f"for {ctx.patient_name} <{ctx.patient_email}>. "
+            "Reply yes to book, or change a detail."
+        )
+        facts["missing"] = ["book_confirm"]
         return {"facts": facts}
 
     try:
@@ -241,6 +402,14 @@ def book_node(state: TurnState, runtime: Runtime[ChatContext]) -> dict[str, Any]
         created = booking_created_dict(booking)
         day_iso = to_clinic(start).date().isoformat()
         ctx.remember_book(professional_slug=slug, day=day_iso)
+        _fill_appointment_summary(
+            facts,
+            ctx,
+            slug=slug,
+            code=code,
+            start=booking.starts_at,
+            end=booking.ends_at,
+        )
         facts["status"] = "booked"
         facts["booking_id"] = int(created["id"])  # type: ignore[arg-type]
         facts["hint"] = (
@@ -338,24 +507,193 @@ def build_book_graph() -> StateGraph:
     return builder
 
 
+def _offer_today_first(
+    facts: TurnFacts,
+    ctx: ChatContext,
+    slug: str,
+    code: str,
+    *,
+    band: str | None,
+) -> dict[str, Any]:
+    """When day is missing: offer today if free, else next open day; invite other days."""
+    today = ctx.clinic_day()
+    try:
+        today_starts = engine_list_available_starts(ctx.db, slug, code, today)
+    except BookingError as exc:
+        facts["status"] = "need_info"
+        facts["error"] = str(exc)
+        facts["hint"] = str(exc)
+        facts["missing"] = ["day"]
+        return {"facts": facts}
+
+    if today_starts:
+        offer_day = today
+    else:
+        try:
+            nxt = engine_list_next_available_starts(
+                ctx.db, slug, code, today, limit_days=1, limit_starts_per_day=5
+            )
+        except BookingError as exc:
+            facts["status"] = "need_info"
+            facts["error"] = str(exc)
+            facts["hint"] = str(exc)
+            facts["missing"] = ["day"]
+            return {"facts": facts}
+        if not nxt:
+            facts["status"] = "need_info"
+            facts["error"] = "No free starts in the next two weeks."
+            facts["hint"] = facts["error"]
+            facts["missing"] = ["day"]
+            return {"facts": facts}
+        offer_day = nxt[0].day
+
+    ctx.draft.day = offer_day.isoformat()
+    facts["resolved_day"] = format_day_label(offer_day)
+    starts = filter_starts_by_band(
+        engine_list_available_starts(ctx.db, slug, code, offer_day), band
+    )
+    if not starts and band:
+        # Same as named-day path: show the day's windows and drop the band filter.
+        wanted = band
+        summary = summarize_day_availability(
+            ctx.db, slug, code, offer_day, sample_per_band=2
+        )
+        avail = day_availability_dict(summary)
+        avail["suggest_other_days"] = True
+        samples = _samples_from_availability(avail, band=None)
+        facts["status"] = "offer_slots"
+        facts["availability"] = avail
+        facts["offered_starts"] = samples["isos"]
+        facts["offered_times"] = samples["clocks"]
+        facts["missing"] = ["starts_at"]
+        facts["time_band"] = ""
+        facts["error"] = f"No {wanted} starts on {format_day_label(offer_day)}"
+        facts["hint"] = (
+            f"{facts['error']}. Show windows and ask if they want tomorrow or another day."
+        )
+        return {"facts": facts}
+
+    summary = summarize_day_availability(
+        ctx.db,
+        slug,
+        code,
+        offer_day,
+        time_band=band,
+        sample_per_band=2,
+    )
+    avail = day_availability_dict(summary)
+    avail["suggest_other_days"] = True
+    samples = _samples_from_availability(avail, band=band)
+    facts["status"] = "offer_slots"
+    facts["availability"] = avail
+    facts["offered_starts"] = samples["isos"]
+    facts["offered_times"] = samples["clocks"]
+    facts["missing"] = ["starts_at"]
+    label = "today" if offer_day == today else "the next open day"
+    facts["hint"] = (
+        f"Offer start windows for {label} ({format_day_label(offer_day)}). "
+        "Ask if they want one of those times, or tomorrow / another day. "
+        "Do not invent times."
+    )
+    return {"facts": facts}
+
+
 def _offer_days(
     facts: TurnFacts, days: list[Any], *, hint: str, band: str | None = None
 ) -> dict[str, Any]:
     starts: list[str] = []
     times: list[str] = []
+    next_days: list[dict[str, Any]] = []
     for block in days:
-        filtered = filter_starts_by_band(list(block.starts), band)
-        for start in filtered or list(block.starts)[:3]:
+        filtered = filter_starts_by_band(list(block.starts), band) or list(block.starts)
+        windows = _clock_windows(filtered)
+        for start in filtered[:_MAX_OFFER_SAMPLES]:
             starts.append(start.isoformat())
-            times.append(f"{block.day.isoformat()} {to_clinic(start).strftime('%H:%M')}")
+            times.append(to_clinic(start).strftime("%H:%M"))
+        next_days.append(
+            {
+                "day": block.day.isoformat(),
+                "weekday": block.day.strftime("%A"),
+                "start_windows": windows,
+                "sample_starts": [
+                    to_clinic(s).strftime("%H:%M") for s in filtered[:_MAX_OFFER_SAMPLES]
+                ],
+            }
+        )
     facts["status"] = "offer_slots"
-    facts["offered_starts"] = starts[:15]
-    facts["offered_times"] = times[:15]
+    facts["offered_starts"] = starts[:_MAX_OFFER_SAMPLES]
+    facts["offered_times"] = times[:_MAX_OFFER_SAMPLES]
     facts["missing"] = ["day", "starts_at"]
     facts["hint"] = hint
     if days:
         facts["resolved_day"] = format_day_label(days[0].day)
+        first_windows = next_days[0]["start_windows"] if next_days else []
+        facts["availability"] = {
+            "day": days[0].day.isoformat(),
+            "weekday": days[0].day.strftime("%A"),
+            "bands": {
+                "morning": {"start_windows": [], "sample_starts": []},
+                "afternoon": {"start_windows": [], "sample_starts": []},
+                "evening": {"start_windows": [], "sample_starts": []},
+            },
+            "next_days": next_days,
+            "start_windows": first_windows,
+        }
     return {"facts": facts}
+
+
+def _candidate_lines(ctx: ChatContext) -> list[str]:
+    """Human lines for pending doctor candidates."""
+    by_slug = {row.slug: row for row in list_professionals(ctx.db)}
+    lines: list[str] = []
+    slugs = ctx.draft.professional_candidates or (
+        [ctx.draft.professional_slug] if ctx.draft.professional_slug else []
+    )
+    for i, slug in enumerate(slugs, start=1):
+        row = by_slug.get(slug)
+        if row is None:
+            lines.append(f"{i}. {slug}")
+        else:
+            level = "senior" if row.is_senior else "junior"
+            lines.append(f"{i}. {row.name} ({level})")
+    return lines
+
+
+def _clock_windows(starts: list[Any]) -> list[list[str]]:
+    """Collapse sorted starts into inclusive HH:MM windows on the 15-minute grid."""
+    if not starts:
+        return []
+    local = sorted(to_clinic(s) for s in starts)
+    windows: list[list[str]] = []
+    run_start = local[0]
+    prev = local[0]
+    step = 15 * 60
+    for cur in local[1:]:
+        if (cur - prev).total_seconds() > step:
+            windows.append(
+                [run_start.strftime("%H:%M"), prev.strftime("%H:%M")]
+            )
+            run_start = cur
+        prev = cur
+    windows.append([run_start.strftime("%H:%M"), prev.strftime("%H:%M")])
+    return windows
+
+
+def _samples_from_availability(
+    avail: dict[str, Any], *, band: str | None
+) -> dict[str, list[str]]:
+    """Flatten Plan B samples into offered_times / ISO starts for replies."""
+    day = str(avail.get("day") or "")
+    bands = avail.get("bands") or {}
+    clocks: list[str] = []
+    if band in bands:
+        clocks.extend(list((bands[band] or {}).get("sample_starts") or []))
+    else:
+        for name in ("morning", "afternoon", "evening"):
+            clocks.extend(list((bands.get(name) or {}).get("sample_starts") or []))
+    clocks = clocks[:_MAX_OFFER_SAMPLES]
+    isos = [f"{day}T{c}:00+08:00" for c in clocks if day and c]
+    return {"clocks": clocks, "isos": isos}
 
 
 def _same_service_block(ctx: ChatContext) -> TurnFacts | None:
@@ -386,19 +724,55 @@ def _same_service_block(ctx: ChatContext) -> TurnFacts | None:
     if requested is not None:
         facts["resolved_day"] = format_day_label(requested)
     facts["status"] = "book_failed"
-    when = match.starts_at.isoformat()
+    when = format_patient_span(match.starts_at, match.ends_at)
     requested_note = (
         f" That existing appointment is on {when} — not the day you asked for"
         + (f" ({facts['resolved_day']})" if facts.get("resolved_day") else "")
         + "."
     )
+    manage = (
+        "Cancel or reschedule that booking on the website"
+        if ctx.is_authenticated
+        else "Log in on the website to cancel or reschedule that booking, "
+        "or use a different email"
+    )
     facts["error"] = (
-        f"Contact {email} already has an active service {code} booking "
-        f"(#{match.booking_id} starting {when})."
+        f"You already have an upcoming service {code} booking "
+        f"(#{match.booking_id}, {when})."
         f"{requested_note} "
-        "Log in to cancel/reschedule that booking, or confirm a different email. "
-        "I did not create a new booking."
+        f"{manage}. I did not create a new booking."
     )
     facts["hint"] = facts["error"]
     facts["booking_id"] = match.booking_id
     return facts
+
+
+def _professional_name(ctx: ChatContext, slug: str) -> str:
+    """Resolve catalog display name for a professional slug."""
+    for row in list_professionals(ctx.db):
+        if row.slug == slug:
+            return row.name
+    return slug
+
+
+def _fill_appointment_summary(
+    facts: TurnFacts,
+    ctx: ChatContext,
+    *,
+    slug: str,
+    code: str,
+    start: object,
+    end: object | None = None,
+) -> None:
+    """Attach patient-facing confirm/booked fields to facts."""
+    local = to_clinic(start)  # type: ignore[arg-type]
+    duration = get_service_duration(ctx.db, code)
+    if end is None:
+        end = start + timedelta(minutes=duration)  # type: ignore[operator]
+    facts["resolved_day"] = format_day_label(local.date())
+    facts["offered_starts"] = [start.isoformat()]  # type: ignore[union-attr]
+    facts["offered_times"] = [format_patient_clock(start)]  # type: ignore[arg-type]
+    facts["ends_at_clock"] = format_patient_clock(end)  # type: ignore[arg-type]
+    facts["professional_name"] = _professional_name(ctx, slug)
+    facts["service_code"] = code
+    facts["duration_minutes"] = duration

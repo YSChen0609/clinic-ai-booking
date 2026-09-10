@@ -87,13 +87,13 @@ def build_faq_doctor(ctx: ChatContext) -> str:
         lines = ["Our bookable professionals:"]
         for row in rows:
             senior = "senior" if row.is_senior else "junior"
-            lines.append(f"- {row.name} ({row.slug}, {senior})")
+            lines.append(f"- {row.name} ({senior})")
     except Exception:
         logger.exception("faq doctors: db lookup failed; using static catalog")
         lines = ["Our bookable professionals:"]
         for doc in DOCTORS:
             senior = "senior" if doc.is_senior else "junior"
-            lines.append(f"- {doc.name} ({doc.slug}, {senior})")
+            lines.append(f"- {doc.name} ({senior})")
     lines.append("Who would you like to book with?")
     return "\n".join(lines)
 

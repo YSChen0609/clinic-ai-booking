@@ -20,6 +20,16 @@ class TurnFacts(TypedDict):
     clinic_today: str
     resolved_day: str
     time_band: str
+    # Plan B compact availability (day/weekday/bands); empty dict when unused.
+    availability: dict[str, Any]
+    doctor_candidates: list[str]
+    # ISO dates when clarifying "next Friday" (this week vs next week).
+    day_options: list[str]
+    # Confirm / booked summary fields (patient-facing).
+    professional_name: str
+    service_code: str
+    duration_minutes: int | None
+    ends_at_clock: str
 
 
 def empty_facts() -> TurnFacts:
@@ -37,6 +47,13 @@ def empty_facts() -> TurnFacts:
         clinic_today="",
         resolved_day="",
         time_band="",
+        availability={},
+        doctor_candidates=[],
+        day_options=[],
+        professional_name="",
+        service_code="",
+        duration_minutes=None,
+        ends_at_clock="",
     )
 
 

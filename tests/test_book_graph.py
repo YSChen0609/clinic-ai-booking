@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, time
 
+import pytest
 from sqlalchemy.orm import Session
 
 from clinic_ai_booking.domain.booking import (
@@ -23,6 +24,14 @@ from clinic_ai_booking.chat.resolve import resolve_professional_slug
 from clinic_ai_booking.domain.hours import clinic_datetime, to_clinic
 
 MONDAY = date(2026, 8, 31)
+
+
+@pytest.fixture(autouse=True)
+def _freeze_clinic_now_on_monday_morning(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "clinic_ai_booking.domain.booking._clinic_now",
+        lambda: clinic_datetime(MONDAY, time(8, 0)),
+    )
 
 
 class _Runtime:
@@ -56,13 +65,69 @@ def test_doctor_service_asks_for_missing(db_session: Session) -> None:
     assert "service_code" in out["facts"]["missing"]
 
 
+def test_doctor_service_seniors_only_hides_junior(db_session: Session) -> None:
+    ctx = ChatContext(db=db_session, user_id=None, today=MONDAY)
+    ctx.draft.service_code = "D"
+    out = doctor_service(_state(), _Runtime(ctx))
+    assert out["facts"]["status"] == "need_info"
+    assert "professional_slug" in out["facts"]["missing"]
+    pros = out["facts"]["catalog_professionals"]
+    assert pros
+    assert all("senior" in line for line in pros)
+    assert not any("junior" in line for line in pros)
+    from clinic_ai_booking.chat.reply import _fallback_reply
+
+    reply = _fallback_reply(out["facts"])
+    assert "Dr. Alex Chen" not in reply
+    assert "Dr. Maya Lin" in reply or "Maya" in reply
+
+
+def test_doctor_service_all_pros_for_service_a(db_session: Session) -> None:
+    ctx = ChatContext(db=db_session, user_id=None, today=MONDAY)
+    ctx.draft.service_code = "A"
+    out = doctor_service(_state(), _Runtime(ctx))
+    pros = out["facts"]["catalog_professionals"]
+    assert any("junior" in line for line in pros)
+    assert any("senior" in line for line in pros)
+
+def test_doctor_service_requires_confirm_when_ambiguous(db_session: Session) -> None:
+    ctx = ChatContext(db=db_session, user_id=None, today=MONDAY)
+    ctx.draft.service_code = "A"
+    ctx.draft.professional_slug = None
+    ctx.draft.professional_confirmed = False
+    ctx.draft.professional_candidates = ["senior-1", "senior-2"]
+    out = doctor_service(_state(), _Runtime(ctx))
+    assert out["facts"]["status"] == "need_confirm_doctor"
+    assert len(out["facts"]["doctor_candidates"]) == 2
+
+
+def test_doctor_service_unique_unconfirmed_asks_confirm(db_session: Session) -> None:
+    ctx = ChatContext(db=db_session, user_id=None, today=MONDAY)
+    ctx.draft.service_code = "A"
+    ctx.draft.professional_slug = "junior"
+    ctx.draft.professional_confirmed = False
+    ctx.draft.professional_candidates = ["junior"]
+    out = doctor_service(_state(), _Runtime(ctx))
+    assert ctx.draft.professional_confirmed is False
+    assert out["facts"]["status"] == "need_confirm_doctor"
+    assert "Did you mean" in (out["facts"]["error"] or "")
+
 def test_doctor_service_rejects_junior_for_senior_service(db_session: Session) -> None:
     ctx = ChatContext(db=db_session, user_id=None, today=MONDAY)
     ctx.draft.service_code = "E"
     ctx.draft.professional_slug = "junior"
+    ctx.draft.professional_confirmed = True
     out = doctor_service(_state(), _Runtime(ctx))
-    assert out["facts"]["status"] == "need_info"
+    assert out["facts"]["status"] == "need_confirm_doctor"
     assert out["facts"]["error"]
+    assert "Offer a" not in (out["facts"]["error"] or "")
+    assert "Seniors who can do this service:" in (out["facts"]["error"] or "")
+    assert "1. " in (out["facts"]["error"] or "")
+    assert any("senior" in line for line in out["facts"]["doctor_candidates"])
+    assert "different service" in (out["facts"]["error"] or "").lower()
+    assert ctx.draft.professional_slug is None
+    assert "senior-1" in ctx.draft.professional_candidates
+    assert "senior-2" in ctx.draft.professional_candidates
 
 
 def test_doctor_service_blocks_same_service_early(db_session: Session) -> None:
@@ -87,11 +152,17 @@ def test_doctor_service_blocks_same_service_early(db_session: Session) -> None:
     )
     ctx.draft.service_code = "A"
     ctx.draft.professional_slug = "junior"
+    ctx.draft.professional_confirmed = True
     out = doctor_service(_state(), _Runtime(ctx))
     assert out["facts"]["status"] == "book_failed"
-    assert "same-pat@example.com" in out["facts"]["error"]
     assert f"#{booking.id}" in out["facts"]["error"]
-    assert "active service A" in out["facts"]["error"]
+    assert "upcoming service A" in out["facts"]["error"]
+    assert "website" in (out["facts"]["error"] or "").lower()
+    # Guest copy may say "Log in on the website…"; avoid the old "Log in to …" engine phrase.
+    assert "Log in to reschedule or cancel" not in (out["facts"]["error"] or "")
+    assert "use a different email" in (out["facts"]["error"] or "").lower() or "Log in on the website" in (
+        out["facts"]["error"] or ""
+    )
 
 
 def test_client_id_asks_for_name_and_email(db_session: Session) -> None:
@@ -115,6 +186,7 @@ def test_apply_extract_detects_chen_in_sentence(db_session: Session) -> None:
     apply_extract(ctx, extracted, user_text=text)
     assert ctx.draft.service_code == "A"
     assert ctx.draft.professional_slug == "junior"
+    assert ctx.draft.professional_confirmed is True
     assert ctx.draft.day == "2026-09-01"
     assert ctx.draft.time_band == "morning"
 
@@ -140,14 +212,87 @@ def test_apply_extract_him_and_also_reuses_memory(db_session: Session) -> None:
     apply_extract(ctx, extracted, user_text=text)
     assert ctx.draft.service_code == "C"
     assert ctx.draft.professional_slug == "junior"
+    assert ctx.draft.professional_confirmed is True
     assert ctx.draft.day == tomorrow
     assert ctx.draft.time_band == "afternoon"
+
+
+def test_available_time_no_day_offers_today_first(db_session: Session) -> None:
+    ctx = ChatContext(db=db_session, user_id=None, today=MONDAY)
+    ctx.draft.service_code = "A"
+    ctx.draft.professional_slug = "junior"
+    ctx.draft.professional_confirmed = True
+    out = available_time(_state(), _Runtime(ctx))
+    assert out["facts"]["status"] == "offer_slots"
+    assert ctx.draft.day == MONDAY.isoformat()
+    assert out["facts"]["availability"].get("suggest_other_days") is True
+    assert out["facts"]["availability"]["day"] == MONDAY.isoformat()
+    assert "Monday 31 Aug 2026" in out["facts"]["resolved_day"]
+    assert out["facts"]["availability"]["bands"]["morning"]["start_windows"]
+
+
+def test_available_time_no_day_skips_full_today(db_session: Session) -> None:
+    n = 0
+    while True:
+        remaining = engine_list_available_starts(db_session, "junior", "A", MONDAY)
+        if not remaining:
+            break
+        engine_book(
+            db_session,
+            professional_slug="junior",
+            service_code="A",
+            starts_at=remaining[0],
+            patient_name=f"Fill {n}",
+            patient_email=f"fill{n}@example.com",
+        )
+        n += 1
+    ctx = ChatContext(db=db_session, user_id=None, today=MONDAY)
+    ctx.draft.service_code = "A"
+    ctx.draft.professional_slug = "junior"
+    ctx.draft.professional_confirmed = True
+    out = available_time(_state(), _Runtime(ctx))
+    assert out["facts"]["status"] == "offer_slots"
+    assert ctx.draft.day == date(2026, 9, 1).isoformat()
+    assert out["facts"]["availability"].get("suggest_other_days") is True
+    assert out["facts"]["availability"]["day"] == "2026-09-01"
+
+
+def test_available_time_bare_clock_soft_locks_today(db_session: Session) -> None:
+    ctx = ChatContext(db=db_session, user_id=None, today=MONDAY)
+    ctx.draft.service_code = "A"
+    ctx.draft.professional_slug = "junior"
+    ctx.draft.professional_confirmed = True
+    ctx.draft.starts_at = "09:00"
+    out = available_time(_state(), _Runtime(ctx))
+    assert out["facts"]["status"] == "slot_ok"
+    assert ctx.draft.day == MONDAY.isoformat()
+    assert ctx.draft.starts_at_confirmed is True
+
+
+def test_available_time_offers_plan_b_windows(db_session: Session) -> None:
+    ctx = ChatContext(db=db_session, user_id=None, today=MONDAY)
+    ctx.draft.service_code = "A"
+    ctx.draft.professional_slug = "junior"
+    ctx.draft.professional_confirmed = True
+    ctx.draft.day = MONDAY.isoformat()
+    out = available_time(_state(), _Runtime(ctx))
+    assert out["facts"]["status"] == "offer_slots"
+    assert "09:00" in out["facts"]["offered_times"]
+    avail = out["facts"]["availability"]
+    assert avail["weekday"] == "Monday"
+    assert avail["day"] == MONDAY.isoformat()
+    morning = avail["bands"]["morning"]
+    assert morning["start_windows"]
+    assert morning["sample_starts"]
+    # Samples are short — not a dump of every grid tick.
+    assert len(out["facts"]["offered_times"]) <= 3
 
 
 def test_available_time_offers_starts(db_session: Session) -> None:
     ctx = ChatContext(db=db_session, user_id=None, today=MONDAY)
     ctx.draft.service_code = "A"
     ctx.draft.professional_slug = "junior"
+    ctx.draft.professional_confirmed = True
     ctx.draft.day = MONDAY.isoformat()
     out = available_time(_state(), _Runtime(ctx))
     assert out["facts"]["status"] == "offer_slots"
@@ -158,13 +303,14 @@ def test_available_time_filters_morning_band(db_session: Session) -> None:
     ctx = ChatContext(db=db_session, user_id=None, today=MONDAY)
     ctx.draft.service_code = "A"
     ctx.draft.professional_slug = "junior"
+    ctx.draft.professional_confirmed = True
     ctx.draft.day = MONDAY.isoformat()
     ctx.draft.time_band = "morning"
     out = available_time(_state(), _Runtime(ctx))
     assert out["facts"]["status"] == "offer_slots"
     assert out["facts"]["time_band"] == "morning"
     assert all(int(t.split(":")[0]) < 12 for t in out["facts"]["offered_times"])
-    assert "Monday 2026-08-31" in out["facts"]["resolved_day"]
+    assert "Monday 31 Aug 2026" in out["facts"]["resolved_day"]
 
 
 def test_available_time_morning_fallback_does_not_label_band(
@@ -192,6 +338,7 @@ def test_available_time_morning_fallback_does_not_label_band(
     ctx = ChatContext(db=db_session, user_id=None, today=MONDAY)
     ctx.draft.service_code = "A"
     ctx.draft.professional_slug = "junior"
+    ctx.draft.professional_confirmed = True
     ctx.draft.day = MONDAY.isoformat()
     ctx.draft.time_band = "morning"
     out = available_time(_state(), _Runtime(ctx))
@@ -223,8 +370,10 @@ def test_book_graph_end_to_end_writes(db_session: Session) -> None:
     )
     ctx.draft.service_code = "A"
     ctx.draft.professional_slug = "junior"
+    ctx.draft.professional_confirmed = True
     ctx.draft.day = MONDAY.isoformat()
     ctx.draft.starts_at = start.isoformat()
+    ctx.draft.book_confirmed = True
 
     graph = build_book_graph().compile()
     result = graph.invoke(
@@ -239,6 +388,29 @@ def test_book_graph_end_to_end_writes(db_session: Session) -> None:
     assert ctx.memory.last_day == MONDAY.isoformat()
 
 
+def test_book_node_asks_confirm_before_write(db_session: Session) -> None:
+    start = clinic_datetime(MONDAY, time(9, 0))
+    ctx = ChatContext(
+        db=db_session,
+        user_id=None,
+        patient_name="Confirm Pat",
+        patient_email="confirm-pat@example.com",
+        contact_confirmed=True,
+        today=MONDAY,
+    )
+    ctx.draft.service_code = "A"
+    ctx.draft.professional_slug = "junior"
+    ctx.draft.professional_confirmed = True
+    ctx.draft.day = MONDAY.isoformat()
+    ctx.draft.starts_at = start.isoformat()
+    ctx.draft.book_confirmed = False
+    out = book_node(_state(), _Runtime(ctx))
+    assert out["facts"]["status"] == "need_confirm_book"
+    ctx.draft.book_confirmed = True
+    booked = book_node(_state(), _Runtime(ctx))
+    assert booked["facts"]["status"] == "booked"
+
+
 def test_book_node_fails_on_conflict(db_session: Session) -> None:
     start = clinic_datetime(MONDAY, time(9, 0))
     first = ChatContext(
@@ -251,8 +423,10 @@ def test_book_node_fails_on_conflict(db_session: Session) -> None:
     )
     first.draft.service_code = "A"
     first.draft.professional_slug = "junior"
+    first.draft.professional_confirmed = True
     first.draft.day = MONDAY.isoformat()
     first.draft.starts_at = start.isoformat()
+    first.draft.book_confirmed = True
     booked = book_node(_state(), _Runtime(first))
     assert booked["facts"]["status"] == "booked"
     db_session.commit()
@@ -267,7 +441,47 @@ def test_book_node_fails_on_conflict(db_session: Session) -> None:
     )
     second.draft.service_code = "A"
     second.draft.professional_slug = "junior"
+    second.draft.professional_confirmed = True
     second.draft.day = MONDAY.isoformat()
     second.draft.starts_at = start.isoformat()
+    second.draft.book_confirmed = True
     conflict = book_node(_state(), _Runtime(second))
     assert conflict["facts"]["status"] == "book_failed"
+
+
+def test_doctor_service_asks_next_friday_clarify(db_session: Session) -> None:
+    ctx = ChatContext(db=db_session, user_id=None, today=date(2026, 9, 9))
+    ctx.draft.service_code = "B"
+    ctx.draft.professional_slug = "junior"
+    ctx.draft.professional_confirmed = True
+    ctx.draft.day_clarify_options = ["2026-09-11", "2026-09-18"]
+    out = doctor_service(_state(), _Runtime(ctx))
+    assert out["facts"]["status"] == "need_clarify_day"
+    assert out["facts"]["day_options"] == ["2026-09-11", "2026-09-18"]
+    assert "Friday 11 Sep 2026" in (out["facts"]["error"] or "")
+    assert "Friday 18 Sep 2026" in (out["facts"]["error"] or "")
+
+
+def test_available_time_snaps_off_grid_and_asks_confirm(db_session: Session) -> None:
+    ctx = ChatContext(db=db_session, user_id=None, today=MONDAY)
+    ctx.draft.service_code = "A"
+    ctx.draft.professional_slug = "junior"
+    ctx.draft.professional_confirmed = True
+    ctx.draft.day = MONDAY.isoformat()
+    ctx.draft.starts_at = "09:20"
+    out = available_time(_state(), _Runtime(ctx))
+    assert out["facts"]["status"] == "need_confirm_slot"
+    assert out["facts"]["offered_times"] == ["09:15"]
+    assert ctx.draft.starts_at_confirmed is False
+
+
+def test_available_time_exact_grid_is_slot_ok(db_session: Session) -> None:
+    ctx = ChatContext(db=db_session, user_id=None, today=MONDAY)
+    ctx.draft.service_code = "A"
+    ctx.draft.professional_slug = "junior"
+    ctx.draft.professional_confirmed = True
+    ctx.draft.day = MONDAY.isoformat()
+    ctx.draft.starts_at = "09:15"
+    out = available_time(_state(), _Runtime(ctx))
+    assert out["facts"]["status"] == "slot_ok"
+    assert ctx.draft.starts_at_confirmed is True

@@ -1,7 +1,7 @@
 # OAuth setup — Google + Outlook (stage 6)
 
 Local `.env` only (from `.env.example`). **Do not commit secrets.**  
-Unit tests use fakes; this is for `NOTIFY_MODE=real` smoke → [smoke_test.md](smoke_test.md#google--outlook-notify-stage-6--real-credentials-local-only). Clinic-facing summary: [external.md](external.md).
+Unit tests use fakes; this is for `NOTIFY_MODE=real` smoke → [smoke_test.md](smoke_test.md#google--outlook-notify-stage-6--real-credentials-local-only). Clinic-facing summary: [../external.md](../external.md).
 
 Prefer a dedicated clinic mailbox. Personal Gmail is OK for local-only Google testing.  
 After editing `.env`, restart: `docker compose up -d --force-recreate app`.

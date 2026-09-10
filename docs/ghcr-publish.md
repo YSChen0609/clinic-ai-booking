@@ -64,6 +64,6 @@ Not wired in this repo yet (CI deferred). Add when you want automated publishes.
 
 ## Notes
 
-- Do **not** bake `.env` into the image (Dockerfile / `.dockerignore` already keep secrets out). Runtime config stays Compose / env.
+- Do **not** bake `.env` into the image (Dockerfile / `.dockerignore` already keep secrets out). Runtime config stays Compose / env — see [secrets-runtime.md](secrets-runtime.md).
 - Voicebox: separate image if you ever mirror it to your own GHCR; Compose currently builds from `https://github.com/agjs/voicebox.git#v0.2.16`.
 - Storage/bandwidth: depends on GitHub plan and public vs private packages — check **Billing → Packages** if it matters.

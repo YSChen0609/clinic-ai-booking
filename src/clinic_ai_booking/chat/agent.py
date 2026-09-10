@@ -29,6 +29,9 @@ class TurnResult:
     reply: str
     thread_id: str
     can_book_now: bool
+    # Structured booking outcome for tests / debugging (not shown to the patient).
+    facts: dict[str, Any]
+    in_scope: bool
 
 
 class ClinicAgent:
@@ -92,8 +95,11 @@ class ClinicAgent:
         save_context(session, ctx)
 
         reply = (result.get("reply") or "").strip() or "Sorry, I could not produce a reply."
+        facts = dict(result.get("facts") or empty_facts())
         return TurnResult(
             reply=reply,
             thread_id=thread_id,
             can_book_now=ctx.can_book_now,
+            facts=facts,
+            in_scope=bool(result.get("in_scope")),
         )
