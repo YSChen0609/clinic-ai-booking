@@ -1,0 +1,17 @@
+{
+  "id": "book_without_day_offers_today_or_next",
+  "description": "Service + doctor without day → offer slots (today-first path) (smoke 3b).",
+  "turns": [
+    {
+      "user": "I want service A with Dr. Chen",
+      "expect": {
+        "in_scope": true,
+        "status_in": ["offer_slots", "need_info"],
+        "draft": {
+          "service_code": "A",
+          "professional_slug": "junior"
+        }
+      }
+    }
+  ]
+}

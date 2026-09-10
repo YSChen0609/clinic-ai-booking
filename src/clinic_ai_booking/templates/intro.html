@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="intro">
+  <h1>Welcome</h1>
+  <p>
+  Book dental appointments with our clinic through chat.
+  Browse as a visitor; you will be asked for name and email when booking.
+  Log in (name + email, no password in v1) to cancel or reschedule.
+  </p>
+  <h2>Our professionals</h2>
+  <ul class="doctor-list">
+    {% for d in doctors %}
+    <li>
+      <a href="/doctors/{{ d.slug }}">
+        <strong>{{ d.name }}</strong>
+        <span>{{ d.role }}</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}
