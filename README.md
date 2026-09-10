@@ -6,11 +6,42 @@ Login is name + email with **no password** — local demo only.
 
 ## Quick start
 
+### 1. Clone
+
 ```bash
 git clone https://github.com/YSChen0609/clinic-ai-booking.git
 cd clinic-ai-booking
-cp .env.example .env
+```
 
+SSH: `git clone git@github.com:YSChen0609/clinic-ai-booking.git`
+
+### 2. Configure `.env`
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` before Compose (never commit it):
+
+| Variable | What to set |
+|----------|-------------|
+| `POSTGRES_PASSWORD` | Strong password for the Compose Postgres service |
+| `SESSION_SECRET` | Uncomment and set a long random string |
+| `POSTGRES_PORT` / `APP_PORT` / `VOICE_PORT` | Change if host ports collide |
+| `NOTIFY_MODE` | Keep `fake` for local demo without calendars |
+| `VOICE_ENABLED` | `false` for text-only |
+
+```env
+POSTGRES_PASSWORD=choose_a_local_password
+SESSION_SECRET=choose_a_long_random_string
+NOTIFY_MODE=fake
+```
+
+Calendar credentials (`GOOGLE_*` / `MS_*`) only when `NOTIFY_MODE=real` — see [docs/oauth-setup.md](docs/oauth-setup.md).
+
+### 3. Spin up
+
+```bash
 # CPU (default)
 docker compose up --build -d
 
@@ -25,8 +56,6 @@ curl -s http://localhost:8000/health
 |--|--|
 | Site | http://localhost:8000 |
 | Voice | http://localhost:8790/health |
-
-SSH clone: `git clone git@github.com:YSChen0609/clinic-ai-booking.git`
 
 ## Tech stack
 
@@ -52,6 +81,10 @@ Confirmed book mirrored to clinic Google Calendar (`NOTIFY_MODE=real`):
 
 ## Docs
 
-- [external.md](external.md) — product, install, use (clinic / operator)
-- [internal.md](internal.md) — architecture, LangGraph, choices, cost, security, tests
-- [docs/smoke_test.md](docs/smoke_test.md) · [TODOS.md](TODOS.md)
+- [external.md](external.md) — clinic-facing product and use guide
+- [internal.md](internal.md) — architecture, install, cost, security, tests
+- [docs/smoke_test.md](docs/smoke_test.md)
+
+## Future work
+
+Deferred items: [TODOS.md](TODOS.md) (also summarized at the end of [internal.md](internal.md#future-work)).

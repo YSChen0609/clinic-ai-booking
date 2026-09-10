@@ -1,14 +1,45 @@
 # Internal
 
-Dental clinic booking assistant (English, `Asia/Taipei`). MVP **0.1.0**. Open work: [TODOS.md](TODOS.md).
+Dental clinic booking assistant (English, `Asia/Taipei`). MVP **0.1.0**.
 
 ## Quick start
+
+### 1. Clone
 
 ```bash
 git clone https://github.com/YSChen0609/clinic-ai-booking.git
 cd clinic-ai-booking
-cp .env.example .env
+```
 
+SSH: `git clone git@github.com:YSChen0609/clinic-ai-booking.git`
+
+### 2. Configure `.env`
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` before Compose (never commit it):
+
+| Variable | What to set |
+|----------|-------------|
+| `POSTGRES_PASSWORD` | Strong password for the Compose Postgres service |
+| `SESSION_SECRET` | Uncomment and set a long random string |
+| `POSTGRES_PORT` / `APP_PORT` / `VOICE_PORT` | Change if host ports collide |
+| `NOTIFY_MODE` | Keep `fake` for local demo without calendars |
+| `VOICE_ENABLED` | `false` for text-only |
+
+```env
+POSTGRES_PASSWORD=choose_a_local_password
+SESSION_SECRET=choose_a_long_random_string
+NOTIFY_MODE=fake
+```
+
+Calendar credentials (`GOOGLE_*` / `MS_*`) only when `NOTIFY_MODE=real` — see [docs/oauth-setup.md](docs/oauth-setup.md).
+
+### 3. Spin up
+
+```bash
 # CPU (default)
 docker compose up --build -d
 
@@ -23,8 +54,6 @@ curl -s http://localhost:8000/health
 |--|--|
 | Site | http://localhost:8000 |
 | Voice | http://localhost:8790/health |
-
-SSH: `git clone git@github.com:YSChen0609/clinic-ai-booking.git`
 
 ## Architecture
 
@@ -101,7 +130,7 @@ Real calendars: [docs/oauth-setup.md](docs/oauth-setup.md). Smoke: [docs/smoke_t
 
 Layout: root packaging + Compose + this file / [external.md](external.md); code in `src/`; ops notes and images in `docs/`.
 
-## Next work
+## Future work
 
 1. Reliable Outlook + dual Google/Outlook smoke
 2. Chat cancel/reschedule

@@ -1,58 +1,72 @@
-# External — clinic guide
+# External — clinic product guide
 
-## Quick start
+For dental clinic owners and front-desk staff. Technical install (clone, `.env`, Docker): [internal.md](internal.md#quick-start).
 
-Needs Docker Desktop (or Engine + Compose v2). Optional NVIDIA GPU: [docs/host-requirements.md](docs/host-requirements.md).
+## What you get
 
-```bash
-git clone https://github.com/YSChen0609/clinic-ai-booking.git
-cd clinic-ai-booking
-cp .env.example .env
-# Edit .env passwords / ports if needed; keep .env private.
+A **website assistant** so patients can:
 
-# CPU (default)
-docker compose up --build -d
+- See your dentists and when they are **busy** (other patients’ names stay private)
+- **Book** by chat — and optionally **speak** into the messenger
+- Receive a **calendar invite and email** from the **clinic’s** Google and/or Outlook account when a booking is confirmed
 
-# Or NVIDIA GPU for faster chat
-docker compose -f compose.yml -f compose.gpu.yml up --build -d
+Language: **English only**. Clinic clock: **Asia/Taipei**.
 
-docker compose exec ollama ollama pull qwen2.5:7b
-```
+![Chat on the clinic site](docs/images/demo-ui.png)
 
-Open [http://localhost:8000](http://localhost:8000) (`/health` → ok). Voice service: port **8790** (`VOICE_ENABLED=false` for text-only).
+![Example confirmed booking on the clinic Google Calendar](docs/images/demo-clinic-calendar.png)
 
-SSH: `git clone git@github.com:YSChen0609/clinic-ai-booking.git`
+## Your team and services
 
-**Without calendars:** leave `NOTIFY_MODE=fake` (default). Bookings still appear on site busy calendars.
+| Who | What they can book |
+|-----|--------------------|
+| Junior dentist | Services **A** and **B** (1 hour each) |
+| Senior dentist 1 | Services **A–E** |
+| Senior dentist 2 | Services **A–E** |
 
-**With calendars (outside the app):** create Google Cloud / Microsoft Entra credentials — [docs/oauth-setup.md](docs/oauth-setup.md) — set `GOOGLE_*` and/or `MS_*`, then `NOTIFY_MODE=real` and recreate the app. Google is the known-good path; Outlook uses the same adapters but Entra setup is easy to misconfigure.
+| Service | Length |
+|---------|--------|
+| A, B | 1 hour |
+| C | 2.5 hours |
+| D | 2 hours |
+| E | 6 hours |
 
-## Product
+The assistant only offers **real free starts** that fit those lengths. It stays on clinic topics (booking and related questions); it does not invent open slots.
 
-Patients can browse doctors (busy times only), book in **chat** (optional **voice**), and — when notify is real — get a **clinic Google and/or Outlook** calendar invite plus email.
+## How patients use it
 
-English only. Timezone: **Asia/Taipei**. Three professionals: junior (services A–B), two seniors (A–E). Durations: A/B 1h, C 2.5h, D 2h, E 6h.
+1. Open the clinic website.
+2. Optionally browse a dentist’s page to see busy times.
+3. Open **Chat**, ask to book (service, dentist, day), pick a time the bot lists, and confirm.
+4. Optional **Log in** with name + email (no password in this demo) if your IT later enables cancel/reschedule that way.
 
-![Site messenger](docs/images/demo-ui.png)
+After a confirmed book, the dentist’s page shows a busy block. With calendars connected, the patient also gets mail / a calendar invite from the clinic.
 
-![Example clinic Google Calendar event after a confirmed book](docs/images/demo-clinic-calendar.png)
+Long service **E** may need a dentist’s OK first (`pending`). The patient can get a “waiting for approval” email; a confirmed calendar event waits until that approve step exists.
 
-## Not included
+## What you (or IT) set up outside this website
 
-- Full practice management (billing, charts)
-- Password login (name + email only — MVP 0.1.0)
-- Patient Google/Microsoft sign-in (clinic calendar sends invites)
-- Doctor approve UI for overtime service E (`pending_doctor`)
+These steps are **not** done inside the chat app:
 
-## Use
+1. **Clinic Google account** (Calendar + send mail) and/or **Microsoft 365 / Outlook** mailbox for the clinic — with admin approval where Microsoft requires it.
+2. Hand the credentials to whoever runs the server so bookings can write to those calendars. Step-by-step for IT: [docs/oauth-setup.md](docs/oauth-setup.md).
+3. Decide whether the demo runs **without** live calendars first (bookings still show on the website) or **with** Google and/or Outlook connected.
 
-1. Open the site → doctor pages → messenger.
-2. Book: service + doctor + day; pick a start the bot lists; confirm.
-3. Optional login (name + email) for cancel/reschedule API.
-4. Confirmed book → busy block on doctor page; with real notify → clinic calendar + patient email. Service E overtime may stay `pending_doctor` (email only until approve exists).
+Patients do **not** sign in with their own Google or Microsoft accounts. The **clinic** calendar creates the invite and lists the patient as a guest.
 
-Rules: [docs/booking_rules.md](docs/booking_rules.md). Checklist: [docs/smoke_test.md](docs/smoke_test.md).
+Server install and day-to-day ops: [internal.md](internal.md).
 
-## If something fails
+## What this is not
 
-Check `/health`, Compose logs (`app`, `db`, `ollama`, `voice`), and `.env`. Calendar/OAuth issues: [docs/oauth-setup.md](docs/oauth-setup.md). Product gaps: [TODOS.md](TODOS.md). Contact whoever runs this stack for the clinic.
+- Not a full practice system (no billing, charts, or X-rays)
+- Not password-protected login yet (name + email only — fine for a closed demo, not for the open internet)
+- Not a staff screen to approve overtime / service E yet
+- Declining a calendar invite does **not** by itself cancel the booking on the clinic website
+
+## If something goes wrong
+
+Contact the person who installed and runs this stack for your clinic. They can check the server and calendar setup ([internal.md](internal.md), [docs/oauth-setup.md](docs/oauth-setup.md)).
+
+## Later improvements
+
+Things we may add next (cancel/reschedule in chat, easier Outlook setup, stronger login, and more): [TODOS.md](TODOS.md).
